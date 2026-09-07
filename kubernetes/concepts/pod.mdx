@@ -1,0 +1,43 @@
+---
+title: "Pod"
+description: "Kubernetes 中最小的部署单元"
+---
+
+Pod 是 Kubernetes 中最小的部署单元,包含一个或多个共享网络和存储的容器。
+
+## 为什么不是直接管理容器
+
+同一 Pod 内的容器:
+
+- 共享 `localhost` 网络,可以通过端口直接通信
+- 可以挂载同一个 Volume 共享文件
+- 总是一起被调度到同一台节点
+
+这让紧密协作的进程(比如应用容器 + 日志收集 Sidecar)可以作为一个整体管理。
+
+## 定义一个 Pod
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest
+      ports:
+        - containerPort: 80
+```
+
+应用并查看:
+
+```bash
+kubectl apply -f pod.yaml
+kubectl get pods
+kubectl describe pod nginx
+```
+
+<Note>
+  实际生产中很少直接创建裸 Pod,通常用 Deployment 等控制器管理,这样 Pod 故障时能自动重建。
+</Note>

@@ -1,0 +1,28 @@
+---
+title: "Kubernetes 概述"
+description: "Kubernetes 是什么,以及它解决什么问题"
+---
+
+Kubernetes(简称 K8s)是一个开源的容器编排平台,用于自动化部署、扩缩和管理容器化应用。
+
+## 为什么需要 Kubernetes
+
+当容器数量增长后,手动管理会遇到这些问题:
+
+- **调度**:容器应该运行在哪台机器上
+- **自愈**:容器崩溃后如何自动重启和替换
+- **扩缩容**:如何根据负载自动调整实例数量
+- **服务发现**:容器之间如何互相找到对方
+
+Kubernetes 把这些问题抽象成声明式 API。你描述期望状态,它负责达成并维持这个状态。
+
+## 核心架构
+
+一个 Kubernetes 集群由两部分组成:
+
+- **控制平面(Control Plane)**:负责全局决策,包括 API Server、etcd、Scheduler 和 Controller Manager
+- **工作节点(Node)**:运行实际负载的机器,每个节点上有 kubelet 和容器运行时
+
+<Card title="安装 Kubernetes" icon="download" href="/kubernetes/install">
+  在本地或云端搭建你的第一个集群。
+</Card>

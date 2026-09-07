@@ -20,3 +20,184 @@
     padding-right: 2rem;
   }
 }
+
+/* 缩小顶部搜索框:默认是 w-full 铺满中间区域,这里改成固定紧凑宽度,
+   高度由 h-9(36px)降到 32px,圆角加大为胶囊形,对齐官网样式。
+   想更宽或更窄,调整 width/max-width 的 12rem 即可。 */
+#search-bar-entry {
+  width: 12rem !important;
+  max-width: 12rem;
+  height: 2rem;
+  border-radius: 9999px;
+  /* 父容器是 justify-center,用 auto 左外边距把搜索框推到最右侧,
+     紧贴右边的导航链接;margin-right 控制与链接之间的间距。 */
+  margin-left: auto;
+  margin-right: 0.5rem;
+}
+
+/* 隐藏侧边栏顶部的 Tab 切换条(指南 / Kubernetes):
+   栏目切换统一走顶部 navbar,侧边栏只显示当前栏目的目录。
+   想恢复显示删掉这段即可。 */
+div:has(> .nav-tabs) {
+  display: none !important;
+}
+
+/* wide 模式页面(如首页)的正文列默认被限制在 54rem(864px),
+   宽屏下右侧留白过多。这里放开限宽,正文填满侧栏以外的剩余宽度。
+   想保留一点上限可改成固定值,例如 max-width: 72rem。 */
+html[data-page-mode="wide"] main#content-container {
+  max-width: none !important;
+}
+
+/* 首页隐藏左侧导航栏:落地页不需要文档目录,正文自动铺满整行。
+   仅对 wide 模式(首页)生效,Kubernetes 等文档页的侧栏不受影响。 */
+html[data-page-mode="wide"] nav#sidebar {
+  display: none !important;
+}
+
+/* ========== 首页落地页(参照 sonews 项目首页设计) ========== */
+
+/* 隐藏默认页头(面包屑/标题/Copy 按钮),由 Banner 取代。
+   注意只能藏 #content-area 里的 header,整个 #content-area 是正文容器 */
+html[data-page-mode="wide"] #content-area > header#header {
+  display: none !important;
+}
+
+/* 落地页隐藏底部的上一页/下一页翻页条 */
+html[data-page-mode="wide"] nav#pagination {
+  display: none !important;
+}
+
+/* 主题会给正文里的链接加主色 border-bottom 下划线,
+   首页的图标/卡片/列表项是整块链接,需要去掉(快捷卡片用完整 border,不受影响) */
+.wiki-tech-item, .wiki-sop-item {
+  border-bottom: none !important;
+}
+
+.wiki-home {
+  --wiki-ink: #1e293b;
+  --wiki-muted: #64748b;
+  --wiki-surface: #ffffff;
+  --wiki-blue: #2563eb;
+  --wiki-orange: #ea580c;
+  --wiki-teal: #0f766e;
+  --wiki-green: #059669;
+  --wiki-red: #dc2626;
+  max-width: 80rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 2rem;
+  color: var(--wiki-ink);
+}
+
+/* --- Banner --- */
+.wiki-banner {
+  position: relative;
+  overflow: hidden;
+  padding: 2rem;
+  border-radius: 1rem;
+  background: linear-gradient(110deg, #2563eb, #4338ca);
+  box-shadow: 0 8px 18px rgba(30, 64, 175, .18);
+  color: #fff;
+}
+.wiki-banner-copy { position: relative; z-index: 1; }
+.wiki-banner-title { margin: 0; font-size: clamp(1.5rem, 3vw, 1.875rem); font-weight: 800; line-height: 1.35; color: #fff; }
+.wiki-banner p { max-width: 48rem; margin: .5rem 0 0; color: #dbeafe; font-size: .875rem; line-height: 1.7; }
+/* Mintlify 的 Icon 组件是遮罩图标:可见颜色由 background-color 决定,
+   默认带 bg-primary 和内联 16px 尺寸,需 !important 覆盖 */
+.wiki-banner > svg { position: absolute; right: -1.25rem; bottom: -2rem; width: 9rem !important; height: 9rem !important; background-color: rgba(255, 255, 255, .18) !important; }
+
+/* --- 小节标题 --- */
+.wiki-section { display: grid; gap: .75rem; }
+.wiki-section-title { display: inline-flex; align-items: center; gap: .5rem; margin: 0; padding: 0 .25rem; color: var(--wiki-ink); font-size: 1rem; font-weight: 800; }
+.wiki-section-title svg { width: 1.125rem !important; height: 1.125rem !important; background-color: var(--wiki-blue) !important; }
+
+/* --- 技术栈生态矩阵 --- */
+.wiki-stack-panel, .wiki-quick-card, .wiki-sop-list {
+  border: 1px solid rgba(226, 232, 240, .85);
+  background: var(--wiki-surface);
+  box-shadow: 0 2px 5px rgba(15, 23, 42, .035);
+}
+.wiki-stack-panel { padding: 1.75rem 1.25rem; border-radius: 1rem; }
+.wiki-tech-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1.5rem .5rem; }
+.wiki-tech-item { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: .5rem; color: #475569 !important; font-size: .75rem; font-weight: 600; text-decoration: none !important; transition: color 180ms ease, transform 180ms ease; }
+.wiki-tech-item:hover { color: var(--wiki-ink) !important; transform: translateY(-2px); }
+.wiki-tech-item img { width: 2rem; height: 2rem; object-fit: contain; }
+.wiki-tech-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- 快速控制台直达 --- */
+.wiki-quick-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; }
+.wiki-quick-card { display: flex; min-height: 7rem; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.25rem; border-radius: 1rem; color: var(--wiki-ink) !important; text-decoration: none !important; transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
+.wiki-quick-card:hover { box-shadow: 0 8px 16px rgba(15, 23, 42, .08); transform: translateY(-2px); }
+.wiki-quick-card > span { display: grid; gap: .25rem; }
+.wiki-quick-card strong { font-size: .875rem; font-weight: 800; }
+.wiki-quick-card small { color: var(--wiki-muted); font-size: .75rem; line-height: 1.55; }
+.wiki-quick-card > svg { flex: none; width: 1.25rem !important; height: 1.25rem !important; }
+.wiki-quick-card.wiki-orange > svg { background-color: var(--wiki-orange) !important; }
+.wiki-quick-card.wiki-orange:hover strong { color: var(--wiki-orange); }
+.wiki-quick-card.wiki-orange:hover { border-color: #fed7aa; }
+.wiki-quick-card.wiki-teal > svg { background-color: var(--wiki-teal) !important; }
+.wiki-quick-card.wiki-teal:hover strong { color: var(--wiki-teal); }
+.wiki-quick-card.wiki-teal:hover { border-color: #99f6e4; }
+.wiki-quick-card.wiki-blue > svg { background-color: var(--wiki-blue) !important; }
+.wiki-quick-card.wiki-blue:hover strong { color: var(--wiki-blue); }
+.wiki-quick-card.wiki-blue:hover { border-color: #bfdbfe; }
+
+/* --- 运维 SOP 列表 --- */
+.wiki-sop-list { overflow: hidden; border-radius: 1rem; }
+.wiki-sop-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; min-height: 5.75rem; padding: 1rem 1.25rem; color: var(--wiki-ink) !important; text-decoration: none !important; transition: background-color 180ms ease; }
+.wiki-sop-item + .wiki-sop-item { border-top: 1px solid #f1f5f9; }
+.wiki-sop-item:hover { background: rgba(248, 250, 252, .9); }
+.wiki-sop-icon { display: grid; width: 2.75rem; height: 2.75rem; place-items: center; border-radius: .5rem; }
+.wiki-sop-icon svg { width: 1.2rem !important; height: 1.2rem !important; }
+.wiki-sop-icon.wiki-red { background: #fef2f2; }
+.wiki-sop-icon.wiki-red svg { background-color: var(--wiki-red) !important; }
+.wiki-sop-icon.wiki-blue { background: #eff6ff; }
+.wiki-sop-icon.wiki-blue svg { background-color: var(--wiki-blue) !important; }
+.wiki-sop-icon.wiki-green { background: #ecfdf5; }
+.wiki-sop-icon.wiki-green svg { background-color: var(--wiki-green) !important; }
+.wiki-sop-copy { display: grid; row-gap: .25rem; }
+.wiki-sop-copy strong { font-size: .875rem; font-weight: 800; }
+.wiki-sop-copy small { color: var(--wiki-muted); font-size: .75rem; line-height: 1.5; }
+.wiki-sop-copy code { width: fit-content; margin-top: .125rem; padding: .1875rem .375rem; border: 1px solid #e2e8f0 !important; border-radius: .5rem; background: #f8fafc !important; color: #94a3b8 !important; font-family: monospace; font-size: .625rem; line-height: 1.2; }
+.wiki-sop-tags { display: flex; max-width: 17rem; flex-wrap: wrap; justify-content: flex-end; gap: .375rem; }
+.wiki-sop-tags span { display: inline-flex; min-height: 1.625rem; align-items: center; padding: .25rem .5625rem; border: 1px solid var(--tag-border, #e2e8f0); border-radius: .5rem; background: var(--tag-background, #f8fafc); color: var(--tag-color, #64748b); font-size: .65625rem; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+.wiki-sop-tags span::before { content: ''; width: .3125rem; height: .3125rem; margin-right: .375rem; border-radius: 50%; background: var(--tag-dot, #94a3b8); }
+.wiki-sop-item[data-tone='red'] .wiki-sop-tags { --tag-background: #fff7f7; --tag-border: #fecaca; --tag-color: #b42318; --tag-dot: #ef4444; }
+.wiki-sop-item[data-tone='blue'] .wiki-sop-tags { --tag-background: #f0f7ff; --tag-border: #bfdbfe; --tag-color: #2563eb; --tag-dot: #3b82f6; }
+.wiki-sop-item[data-tone='green'] .wiki-sop-tags { --tag-background: #f0fdf7; --tag-border: #a7f3d0; --tag-color: #047857; --tag-dot: #10b981; }
+.wiki-sop-item > svg:last-child { width: 1.125rem !important; height: 1.125rem !important; background-color: #cbd5e1 !important; transition: background-color 180ms ease, transform 180ms ease; }
+.wiki-sop-item:hover > svg:last-child { background-color: var(--wiki-blue) !important; transform: translateX(.1875rem); }
+
+/* --- 深色模式适配 --- */
+html.dark .wiki-home { --wiki-ink: #e2e8f0; --wiki-muted: #94a3b8; --wiki-surface: rgba(255, 255, 255, .03); }
+html.dark .wiki-stack-panel, html.dark .wiki-quick-card, html.dark .wiki-sop-list { border-color: rgba(255, 255, 255, .1); box-shadow: none; }
+html.dark .wiki-tech-item { color: #94a3b8 !important; }
+html.dark .wiki-tech-item:hover { color: #e2e8f0 !important; }
+html.dark .wiki-kafka img { filter: invert(1); }
+html.dark .wiki-sop-item + .wiki-sop-item { border-top-color: rgba(255, 255, 255, .07); }
+html.dark .wiki-sop-item:hover { background: rgba(255, 255, 255, .04); }
+html.dark .wiki-sop-copy code { background: rgba(255, 255, 255, .05) !important; border-color: rgba(255, 255, 255, .12) !important; }
+html.dark .wiki-sop-icon.wiki-red { background: rgba(239, 68, 68, .12); }
+html.dark .wiki-sop-icon.wiki-blue { background: rgba(59, 130, 246, .12); }
+html.dark .wiki-sop-icon.wiki-green { background: rgba(16, 185, 129, .12); }
+html.dark .wiki-sop-item[data-tone='red'] .wiki-sop-tags { --tag-background: rgba(239, 68, 68, .08); --tag-border: rgba(239, 68, 68, .35); --tag-color: #f87171; }
+html.dark .wiki-sop-item[data-tone='blue'] .wiki-sop-tags { --tag-background: rgba(59, 130, 246, .08); --tag-border: rgba(59, 130, 246, .35); --tag-color: #60a5fa; }
+html.dark .wiki-sop-item[data-tone='green'] .wiki-sop-tags { --tag-background: rgba(16, 185, 129, .08); --tag-border: rgba(16, 185, 129, .35); --tag-color: #34d399; }
+
+/* --- 响应式 --- */
+@media (max-width: 1024px) {
+  .wiki-tech-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .wiki-quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 768px) {
+  .wiki-quick-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .wiki-banner { padding: 1.5rem; border-radius: .75rem; }
+  .wiki-banner > svg { width: 7.5rem !important; height: 7.5rem !important; }
+  .wiki-stack-panel { padding: 1.5rem .75rem; }
+  .wiki-tech-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .wiki-sop-item { grid-template-columns: auto minmax(0, 1fr) auto; padding: 1rem; }
+  .wiki-sop-tags { display: none; }
+}
