@@ -1,0 +1,22 @@
+/* 加宽页面主体容器,减少宽屏下两侧的空白。
+   Mintlify 默认把正文容器限制在 max-w-8xl(88rem)并居中,
+   这里去掉该上限,让侧栏、正文和目录铺满可用宽度。
+   如果不想完全铺满,把 none 改成固定值即可,例如 max-width: 110rem。 */
+#navbar.is-not-custom.is-not-center + div {
+  max-width: none !important;
+}
+
+/* 同步加宽顶部导航栏:去掉内容区的 max-w-8xl 限制,
+   让 logo、搜索框、链接和按钮铺满左右两边。 */
+#navbar .max-w-8xl {
+  max-width: none !important;
+}
+
+/* 导航栏内边距与正文容器对齐(lg 下都是 2rem),
+   让 logo 与下方侧边栏左缘对齐。 */
+@media (min-width: 1024px) {
+  #navbar .lg\:px-12 {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+}
