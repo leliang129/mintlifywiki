@@ -1,0 +1,180 @@
+---
+title: "Docker 日志与监控"
+description: "掌握容器日志模型、docker logs 用法、日志驱动与轮转配置,以及 docker stats、events、healthcheck 等监控手段。"
+---
+
+容器是短命的,容器一删里面的文件就没了。日志和监控是你了解容器内部状态的唯一窗口。本文讲清 Docker 的日志模型、`docker logs` 用法、日志轮转配置,以及常用监控手段。
+
+## 容器日志模型
+
+Docker 的日志模型非常简单:只关心标准输出(stdout)和标准错误(stderr)。
+
+容器主进程写到 stdout 和 stderr 的内容,会被日志驱动捕获保存。写到文件里的内容,Docker 一概不管。这带来一条重要原则:**应用应该把日志输出到 stdout,而不是写文件**。
+
+```dockerfile
+# 正确做法:前台运行,日志走 stdout
+# nginx 官方镜像正是这么做的,把 access log 软链到 /dev/stdout
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+<Tip>
+  十二要素应用(Twelve-Factor App)把「日志当作事件流」列为核心原则。应用不操心日志存哪,交给运行环境处理。
+</Tip>
+
+## docker logs 用法
+
+`docker logs` 是排查问题的第一把钥匙。
+
+```bash
+# 查看容器全部日志
+docker logs my-nginx
+
+# -f:实时跟踪日志,类似 tail -f
+docker logs -f my-nginx
+
+# --tail:只看最后 100 行
+docker logs --tail 100 my-nginx
+
+# --since:只看最近 10 分钟,也可写绝对时间
+docker logs --since 10m my-nginx
+
+# -t:每行日志前加时间戳
+docker logs -t --tail 20 my-nginx
+
+# 排查线上问题的经典组合:带时间戳、跟踪、先补上下文
+docker logs -f -t --tail 200 my-nginx
+```
+
+<Note>
+  `docker logs` 只读 stdout 和 stderr。应用把日志写进容器内文件的话,要用 `docker exec` 进容器看,更好的做法是改应用输出方式。
+</Note>
+
+## 日志驱动总览
+
+日志驱动决定 Docker 把捕获的日志存到哪里。用 `docker info` 可以查看当前驱动。常用的几种:
+
+| 驱动 | 存储位置 | 特点 | 适用场景 |
+| --- | --- | --- | --- |
+| `json-file` | `/var/lib/docker/containers/` 下的 JSON 文件 | 默认驱动,简单可靠 | 单机开发测试 |
+| `local` | Docker 内部目录,二进制格式 | 高性能,占用小 | 单机生产 |
+| `journald` | systemd journal | 与系统日志统一 | systemd 管理的主机 |
+| `fluentd` | 发送到 Fluentd | 对接日志聚合管道 | 集中式日志平台 |
+
+<Tip>
+  只有 `json-file`、`local`、`journald` 支持 `docker logs` 命令。用 `fluentd` 等远程驱动时,日志要去对应平台看。
+</Tip>
+
+## 日志轮转配置
+
+`json-file` 驱动默认不轮转,容器跑久了日志能把磁盘撑爆。生产环境必须配置轮转。
+
+### Daemon 级配置
+
+编辑 `/etc/docker/daemon.json`,对所有新建容器生效:
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+```
+
+`max-size` 是单个日志文件上限,`max-file` 是保留文件个数。改完执行 `sudo systemctl restart docker` 生效。
+
+<Warning>
+  Daemon 级配置只对重启后新建的容器生效。已有容器的日志配置在创建时固定,需要重建容器。
+</Warning>
+
+### 容器级配置
+
+单个容器可以覆盖 daemon 配置:
+
+```bash
+docker run -d \
+  --name my-nginx \
+  --log-driver json-file \
+  --log-opt max-size=10m \
+  --log-opt max-file=5 \
+  nginx:1.25
+```
+
+Compose 里用 YAML 写法:
+
+```yaml
+services:
+  web:
+    image: nginx:1.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+```
+
+## 监控三板斧
+
+Docker 自带三个命令,覆盖大部分日常监控需求。
+
+```bash
+# 1. docker stats:实时资源占用,类似 top,加 --no-stream 只看一次
+docker stats
+
+# 2. docker events:实时事件流,启停、OOM、健康变化都在这
+docker events --filter container=my-nginx
+
+# 3. docker system df:磁盘占用总览,加 -v 看明细
+docker system df
+```
+
+`docker stats` 看 CPU、内存、网络 IO、磁盘 IO。`docker events` 适合接脚本做告警。`docker system df` 用来盯磁盘。
+
+## 生产监控方案
+
+单机命令适合救火,不适合常态化监控。生产环境的标准组合是 cAdvisor + Prometheus + Grafana:cAdvisor 采集容器指标,Prometheus 存储查询,Grafana 画图展示。
+
+先用 Compose 把 cAdvisor 跑起来:
+
+```yaml
+services:
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+```
+
+启动后访问 `http://localhost:8080` 能看到每个容器的实时指标。之后让 Prometheus 抓取 cAdvisor 的 `/metrics` 接口,再用 Grafana 配面板,就是完整监控体系。
+
+## 容器健康检查 HEALTHCHECK
+
+`HEALTHCHECK` 让 Docker 主动探测容器是否真健康,而不只是进程活着。
+
+```dockerfile
+FROM nginx:1.25
+
+# 每 30 秒探测一次,3 秒超时,连续 3 次失败判为 unhealthy
+# CMD 后的命令退出码为 0 表示健康,非 0 表示不健康
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost/ || exit 1
+```
+
+运行后 `docker ps` 的 STATUS 列会显示 `Up 5 minutes (healthy)`。状态共三种:`starting`、`healthy`、`unhealthy`。
+
+<Tip>
+  编排系统会按健康状态做流量调度和自动重启。单机场景下,HEALTHCHECK 配合 `docker events` 也能实现基础故障告警。
+</Tip>
+
+## 延伸阅读
+
+- [Docker 容器](/docker/docker-容器):容器生命周期与常用命令
+- [Docker 资源限制](/docker/docker-资源限制):限制 CPU 与内存,避免资源耗尽
+- [Docker 故障排查](/docker/docker-故障排查):出问题时的系统化排查方法
+- [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维):集群层面的监控与日志方案

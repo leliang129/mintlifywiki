@@ -28,15 +28,120 @@
         "tab": "Kubernetes",
         "icon": "ship",
         "pages": [
-          "kubernetes/overview",
-          "kubernetes/install",
           {
-            "group": "核心概念",
+            "group": "系列教程",
             "pages": [
-              "kubernetes/concepts/pod",
-              "kubernetes/concepts/service"
+              "kubernetes/kubernetes-基础",
+              "kubernetes/kubernetes-架构",
+              "kubernetes/kubernetes-工作负载",
+              "kubernetes/kubernetes-配置与存储",
+              "kubernetes/kubernetes-网络",
+              "kubernetes/kubernetes-调度与资源",
+              "kubernetes/kubernetes-安全",
+              "kubernetes/kubernetes-集群运维",
+              "kubernetes/kubernetes-故障排查",
+              "kubernetes/kubernetes-生产实践"
             ]
           }
+        ]
+      },
+      {
+        "tab": "Docker",
+        "icon": "container",
+        "pages": [
+          {
+            "group": "系列教程",
+            "pages": [
+              "docker/docker-基础",
+              "docker/docker-镜像",
+              "docker/docker-文件系统",
+              "docker/docker-容器",
+              "docker/docker-网络",
+              "docker/docker-存储",
+              "docker/docker-compose",
+              "docker/docker-资源限制",
+              "docker/docker-安全",
+              "docker/docker-日志与监控",
+              "docker/docker-故障排查",
+              "docker/docker-生产实践"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Middleware",
+        "icon": "/images/icons/layers.svg",
+        "pages": [
+          {
+            "group": "MySQL",
+            "icon": "/images/icons/mysql.svg",
+            "pages": [
+              "middleware/mysql/overview"
+            ]
+          },
+          {
+            "group": "Redis",
+            "icon": "/images/icons/redis.svg",
+            "pages": [
+              "middleware/redis/overview"
+            ]
+          },
+          {
+            "group": "Elasticsearch",
+            "icon": "/images/icons/elasticsearch.svg",
+            "pages": [
+              "middleware/elasticsearch/overview"
+            ]
+          },
+          {
+            "group": "Kafka",
+            "icon": "/images/icons/kafka.svg",
+            "pages": [
+              "middleware/kafka/overview"
+            ]
+          },
+          {
+            "group": "Nginx",
+            "icon": "/images/icons/nginx.svg",
+            "pages": [
+              "middleware/nginx/overview"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "监控与观测",
+        "icon": "/images/icons/prometheus.svg",
+        "pages": [
+          "observability/overview",
+          {
+            "group": "Monitoring",
+            "icon": "/images/icons/prometheus.svg",
+            "pages": [
+              "observability/monitoring/overview"
+            ]
+          },
+          {
+            "group": "ELK",
+            "icon": "/images/icons/elasticsearch.svg",
+            "pages": [
+              "observability/elk/overview"
+            ]
+          },
+          {
+            "group": "Tracing",
+            "icon": "/images/icons/jaeger.svg",
+            "pages": [
+              "observability/tracing/overview"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "自动化运维",
+        "icon": "/images/icons/argocd.svg",
+        "pages": [
+          "automation/overview"
         ]
       }
     ]
@@ -49,23 +154,33 @@
     "links": [
       {
         "label": "Kubernetes",
-        "href": "/kubernetes/overview",
-        "icon": "ship"
+        "href": "/kubernetes/kubernetes-基础",
+        "icon": "/images/icons/kubernetes.svg"
       },
       {
         "label": "Docker",
-        "href": "https://www.docker.com",
-        "icon": "container"
+        "href": "/docker/docker-基础",
+        "icon": "/images/icons/docker.svg"
       },
       {
-        "label": "CNCF",
-        "href": "https://www.cncf.io",
-        "icon": "cloud"
+        "label": "数据中间件",
+        "href": "/middleware/mysql/overview",
+        "icon": "/images/icons/layers.svg"
       },
       {
-        "label": "Helm",
-        "href": "https://helm.sh",
-        "icon": "anchor"
+        "label": "监控与观测",
+        "href": "/observability/overview",
+        "icon": "/images/icons/prometheus.svg"
+      },
+      {
+        "label": "自动化运维",
+        "href": "/automation/overview",
+        "icon": "/images/icons/argocd.svg"
+      },
+      {
+        "label": "CI/CD&GitOps",
+        "href": "/automation/overview",
+        "icon": "/images/icons/gitlab.svg"
       }
     ],
     "primary": {

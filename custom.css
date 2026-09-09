@@ -21,18 +21,99 @@
   }
 }
 
-/* 缩小顶部搜索框:默认是 w-full 铺满中间区域,这里改成固定紧凑宽度,
-   高度由 h-9(36px)降到 32px,圆角加大为胶囊形,对齐官网样式。
-   想更宽或更窄,调整 width/max-width 的 12rem 即可。 */
-#search-bar-entry {
-  width: 12rem !important;
-  max-width: 12rem;
-  height: 2rem;
-  border-radius: 9999px;
-  /* 父容器是 justify-center,用 auto 左外边距把搜索框推到最右侧,
-     紧贴右边的导航链接;margin-right 控制与链接之间的间距。 */
-  margin-left: auto;
-  margin-right: 0.5rem;
+/* 移除顶部搜索框:本地预览未登录时搜索不可用,直接隐藏入口。
+   同时隐藏移动端菜单里的搜索栏。想恢复显示删掉这段即可。 */
+#search-bar-entry,
+#search-bar-entry-mobile {
+  display: none !important;
+}
+
+/* navbar 当前栏目高亮:蓝绿渐变 + 光晕的滑动指示条风格。
+   navbar-active.js 按当前路径给 <li> 加 .navbar-link-active,
+   并把 .navbar-indicator 元素移动到选中项正下方。 */
+#navbar .navbar-link > a {
+  position: relative;
+  padding: 0 0.625rem;
+  transition: color 0.2s ease;
+}
+/* 选中态:文字加深加粗(参考方案的 #0f172a) */
+.navbar-link-active > a {
+  color: #0f172a !important;
+  font-weight: 600;
+}
+html.dark .navbar-link-active > a {
+  color: #f8fafc !important;
+}
+/* 滑动指示条:蓝绿渐变 + 发光,left/width 弹性过渡。
+   注意:元素挂在 body 上用 fixed 定位(由 JS 按选中项 rect 计算位置),
+   这样 React 重渲染导航栏时元素不会被销毁,滑动动画才连续。 */
+.navbar-indicator {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 3px;
+  margin: 0;
+  background: linear-gradient(90deg, #2563eb 0%, #06b6d4 100%);
+  border-radius: 99px;
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.45);
+  transition: left 0.3s cubic-bezier(0.25, 1, 0.5, 1),
+              width 0.3s cubic-bezier(0.25, 1, 0.5, 1),
+              top 0.3s cubic-bezier(0.25, 1, 0.5, 1),
+              opacity 0.2s ease;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+
+/* 导航链接移到左侧,紧跟 logo 排列;Dashboard 按钮和图标保持在最右。
+   仅桌面端(lg+)生效,移动端的导航在汉堡菜单里,不受影响。
+   想恢复右侧布局,删掉这段即可。 */
+@media (min-width: 1024px) {
+  /* 搜索框已隐藏,收掉中间这个空的占位区 */
+  #navbar .z-20.justify-center {
+    display: none !important;
+  }
+  /* logo 区不再伸展,收缩为内容宽度 */
+  #navbar .h-full.min-w-0 > div:first-child {
+    flex: none !important;
+  }
+  /* 右侧链接容器取消右推,改为从左开始排列(紧跟 logo,
+     间距由父容器的 gap-x-4 提供) */
+  #navbar .ml-auto.justify-end {
+    margin-left: 0 !important;
+    justify-content: flex-start !important;
+  }
+  /* nav 是右侧容器的直接 flex 子项,让它撑满剩余宽度 */
+  #navbar nav[aria-label="Main"] {
+    flex: 1;
+  }
+  /* ul 填满 nav,Dashboard 的 auto 外边距才有空间生效 */
+  #navbar nav[aria-label="Main"] > ul {
+    width: 100%;
+  }
+  /* 链接逐级撑满导航栏高度,底部指示条才能贴住导航栏底边 */
+  #navbar .ml-auto.justify-end {
+    align-self: stretch;
+  }
+  #navbar nav[aria-label="Main"] {
+    height: 100%;
+  }
+  #navbar nav[aria-label="Main"] > ul {
+    height: 100%;
+    align-items: stretch;
+  }
+  #navbar .navbar-link {
+    display: flex;
+  }
+  /* Dashboard 按钮保持原高度,垂直居中不被拉高 */
+  #topbar-cta-button {
+    align-items: center;
+  }
+  /* Dashboard 按钮和右侧图标顶回最右 */
+  #topbar-cta-button {
+    margin-left: auto !important;
+  }
 }
 
 /* 隐藏侧边栏顶部的 Tab 切换条(指南 / Kubernetes):

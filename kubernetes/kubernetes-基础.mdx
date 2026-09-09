@@ -1,0 +1,171 @@
+---
+title: "Kubernetes 基础"
+description: "回顾声明式 API 思想,速览核心对象,并通过一个完整示例掌握 kubectl 基本操作。"
+---
+
+本文帮你建立 Kubernetes 的基础操作能力。读完之后,你能理解核心对象的作用,并用 `kubectl` 部署一个真实应用。
+
+## 什么是 Kubernetes
+
+Kubernetes 是一个容器编排系统。它负责把容器调度到合适的节点上运行,并维持你期望的状态。
+
+它解决的核心问题是:当容器数量从几个增长到几百个时,手动管理不再可行。你需要一个系统来自动处理部署、扩容、故障恢复和网络配置。
+
+## 声明式 API 思想回顾
+
+Kubernetes 采用声明式 API。你提交的不是操作指令,而是期望状态的描述。
+
+例如,你告诉系统「运行 3 个 Nginx 副本」,而不是「创建 3 个容器」。Controller 会持续对比实际状态和期望状态。一旦发现偏差,它就采取行动修复。这个过程称为调谐(Reconciliation)。
+
+<Note>
+  命令式告诉系统「怎么做」,声明式告诉系统「要什么」。Kubernetes 的绝大多数对象都遵循声明式模型。
+</Note>
+
+## 核心对象速览
+
+### Pod
+
+Pod 是 Kubernetes 最小的调度单元。一个 Pod 包含一个或多个容器,它们共享网络和存储。通常一个 Pod 只运行一个主容器。
+
+### Deployment
+
+Deployment 管理无状态应用。它负责维持指定数量的 Pod 副本,支持滚动更新和回滚。它是日常使用最多的工作负载对象。
+
+### Service
+
+Service 为一组 Pod 提供稳定的访问入口。Pod 的 IP 会变化,Service 的 IP 和 DNS 名称不会变,详见 [Kubernetes 网络](/kubernetes/kubernetes-网络)。
+
+### Namespace
+
+Namespace 用于在同一集群内做逻辑隔离。不同团队、不同环境可以放在不同的 Namespace 中,便于权限控制和资源配额管理。
+
+### Label 与 Selector
+
+Label 是附加在对象上的键值对,例如 `app: nginx`。Selector 通过 Label 筛选对象。Service 靠 Selector 找到它要代理的 Pod。
+
+<Tip>
+  给所有对象打上有意义的 Label 是好习惯。例如 `app`、`version`、`env`,它们会让排查问题和批量操作容易很多。
+</Tip>
+
+## kubectl 常用命令
+
+`kubectl` 是与集群交互的命令行工具。以下是最高频的命令。
+
+| 命令 | 作用 |
+| --- | --- |
+| `kubectl apply -f <文件>` | 应用 YAML 配置(创建或更新) |
+| `kubectl get pods` | 查看 Pod 列表 |
+| `kubectl get pods -o wide` | 查看 Pod 及所在节点等更多信息 |
+| `kubectl describe pod <名称>` | 查看 Pod 详细信息和事件 |
+| `kubectl logs <Pod 名>` | 查看容器日志 |
+| `kubectl exec -it <Pod 名> -- /bin/sh` | 进入容器交互式 Shell |
+| `kubectl delete -f <文件>` | 删除 YAML 中定义的资源 |
+| `kubectl get all` | 查看当前 Namespace 的主要资源 |
+
+<Warning>
+  `kubectl get` 默认只显示当前 Namespace 的资源。加 `-A` 参数可以查看所有 Namespace。
+</Warning>
+
+## 快速上手示例
+
+下面是一个完整的示例:部署一个 Nginx 应用,并通过 Service 暴露它。
+
+### 编写 Deployment
+
+创建 `nginx-deployment.yaml`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-demo
+  labels:
+    app: nginx
+spec:
+  replicas: 3  # 维持 3 个 Pod 副本
+  selector:
+    matchLabels:
+      app: nginx  # 匹配下方的 Pod 模板 Label
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25
+          ports:
+            - containerPort: 80
+```
+
+### 编写 Service
+
+创建 `nginx-service.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-svc
+spec:
+  selector:
+    app: nginx  # 通过 Label 选中 Deployment 创建的 Pod
+  ports:
+    - port: 80        # Service 端口
+      targetPort: 80  # 转发到 Pod 的端口
+  type: ClusterIP     # 集群内访问
+```
+
+### 部署并验证
+
+```bash
+# 应用两个配置文件
+kubectl apply -f nginx-deployment.yaml
+kubectl apply -f nginx-service.yaml
+
+# 查看 Pod 是否就绪
+kubectl get pods
+
+# 查看 Service 分配的虚拟 IP
+kubectl get svc
+```
+
+Pod 状态变为 `Running` 后,部署即完成。你可以在集群内通过 `nginx-svc` 这个 DNS 名称访问服务。
+
+### 清理资源
+
+```bash
+# 按文件删除资源
+kubectl delete -f nginx-service.yaml
+kubectl delete -f nginx-deployment.yaml
+```
+
+<Tip>
+  把相关的资源定义放在同一个 YAML 文件中,用 `---` 分隔,可以一次性 `apply` 和 `delete`。
+</Tip>
+
+## 常用资源缩写
+
+`kubectl` 支持资源类型的缩写,能明显减少输入量。
+
+| 缩写 | 完整名称 |
+| --- | --- |
+| `po` | pods |
+| `svc` | services |
+| `deploy` | deployments |
+| `rs` | replicasets |
+| `sts` | statefulsets |
+| `ds` | daemonsets |
+| `ns` | namespaces |
+| `cm` | configmaps |
+| `ing` | ingresses |
+| `no` | nodes |
+
+例如,`kubectl get po` 等价于 `kubectl get pods`。
+
+## 延伸阅读
+
+- [Kubernetes 架构](/kubernetes/kubernetes-架构):了解控制平面与节点组件如何协作。
+- [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载):学习 Deployment、StatefulSet 等控制器。
+- [Kubernetes 网络](/kubernetes/kubernetes-网络):理解 Service 与集群服务发现机制。
+- [Kubernetes 配置与存储](/kubernetes/kubernetes-配置与存储):管理应用配置和持久化数据。

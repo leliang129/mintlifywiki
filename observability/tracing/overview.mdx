@@ -1,0 +1,38 @@
+---
+title: "Tracing 概述"
+description: "分布式链路追踪:OpenTelemetry 与后端选型"
+---
+
+链路追踪回答"请求经过了哪些环节,慢在哪一跳"。本小节整理分布式追踪的核心概念、OpenTelemetry 标准与后端组件选型。
+
+## 核心概念
+
+| 概念 | 说明 |
+| ---- | ---- |
+| Trace | 一次请求的完整调用链 |
+| Span | 链路中的一个环节(一次 RPC、一次 DB 查询) |
+| Context Propagation | 跨进程传递 trace_id 的机制,把各环节串成一条链 |
+
+微服务环境下,一个请求可能穿过十几个服务。没有链路追踪,定位慢请求只能靠猜。
+
+## OpenTelemetry
+
+OpenTelemetry(OTel)是 CNCF 的可观测性标准,统一了 Trace、Metrics、Logs 的采集 SDK 与传输协议(OTLP)。应用接入 OTel SDK 后,可以把链路数据发给任意兼容后端,不被厂商绑定。
+
+## 后端选型对比
+
+| 后端 | 特点 | 适用 |
+| ---- | ---- | ---- |
+| Jaeger | Uber 开源的经典实现,UI 直观 | 中小规模,快速上手 |
+| Grafana Tempo | 与 Grafana 深度集成,成本低,对象存储后端 | 已用 Grafana 技术栈 |
+| SkyWalking | 国产 APM,探针功能强,带服务拓扑 | Java 体系为主的团队 |
+
+## 落地要点
+
+- **采样策略**:全量采样成本高,生产常用 1%-10% 头部采样 + 错误全采的尾部采样
+- **与日志联动**:Span 里记录 trace_id,日志里也打印,两个体系互相跳转,见 [ELK 概述](/observability/elk/overview)
+
+## 延伸阅读
+
+- [可观测性概述](/observability/overview)
+- [Monitoring 概述](/observability/monitoring/overview):指标、日志、链路三支柱联动

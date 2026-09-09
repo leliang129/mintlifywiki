@@ -1,0 +1,32 @@
+---
+title: "Nginx 概述"
+description: "反向代理与 Web 服务器的核心概念与运维要点"
+---
+
+Nginx 是高性能的 Web 服务器与反向代理,是大多数流量进入后端服务前的第一站。本小节整理它的配置、使用与运维实践。
+
+## 核心概念速览
+
+| 概念 | 说明 |
+| ---- | ---- |
+| server 块 | 一个虚拟站点,按域名或端口区分 |
+| location 块 | 按 URI 路径匹配,决定请求如何被处理 |
+| upstream | 后端服务器组,负载均衡的对象 |
+| worker 进程 | 实际处理请求的进程,通常等于 CPU 核数 |
+
+## 典型使用场景
+
+- **反向代理**:把 `/api` 转发到后端服务,隐藏内部拓扑
+- **负载均衡**:upstream 轮询、权重、ip_hash
+- **静态资源与 TLS**:直接服务静态文件,集中终止 HTTPS
+- Kubernetes 里的 Ingress Controller 也是 Nginx 的封装,见 [Kubernetes 网络](/kubernetes/kubernetes-网络)
+
+## 运维重点
+
+- **配置热加载**:`nginx -t` 校验后再 `nginx -s reload`,不要直接重启
+- **日志**:access log 是排查流量问题的第一手资料
+- **限流与安全**:`limit_req` 限流、超时与缓冲区参数调优
+
+## 延伸阅读
+
+- [Docker 网络](/docker/docker-网络):容器场景下的端口映射与代理

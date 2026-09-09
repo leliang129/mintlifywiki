@@ -1,0 +1,172 @@
+---
+title: "Docker 安全"
+description: "从非 root 运行、能力裁剪、只读文件系统到镜像扫描的 Docker 安全加固指南"
+---
+
+## 容器的安全边界
+
+容器与虚拟机有本质区别。容器共享宿主机内核,隔离靠 namespace 和 cgroups 实现。虚拟机有独立内核,隔离靠硬件虚拟化。
+
+这意味着容器逃逸的后果更严重。一个内核漏洞可能让攻击者从容器直接拿到宿主机权限。
+
+<Warning>
+  容器不是安全沙箱。默认配置下的容器隔离强度远低于虚拟机。多租户环境和运行不可信代码时,必须主动加固。
+</Warning>
+
+## 以非 root 运行
+
+容器里的进程默认以 root 身份运行。容器内 root 在宿主机上同样是高权限用户。这是最常见的风险来源。
+
+```bash
+# 运行时用 --user 指定普通用户
+docker run -d --name web --user 1000:1000 nginx
+```
+
+更好的做法是在 Dockerfile 里固化。这样任何方式启动都安全。
+
+```dockerfile
+FROM nginx:1.27
+# 创建普通用户
+RUN useradd -m appuser
+# 切换到非 root 用户
+USER appuser
+```
+
+<Tip>
+  优先使用官方镜像的 non-root 变体,例如 `nginxinc/nginx-unprivileged`。它们默认就不用 root 运行。
+</Tip>
+
+## 能力裁剪
+
+Linux 把 root 权限拆成几十个 capability。容器默认持有其中一批,比如修改网络配置的 `NET_ADMIN` 风险很高。
+
+原则是全部丢弃,再按需加回。
+
+```bash
+# 先丢弃所有能力,再加回需要的
+docker run -d --name web \
+  --cap-drop ALL \
+  --cap-add NET_BIND_SERVICE \
+  nginx
+```
+
+Compose 中的写法:
+
+```yaml
+services:
+  web:
+    image: nginx
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+```
+
+<Note>
+  `NET_BIND_SERVICE` 允许进程绑定 1024 以下的特权端口。普通 Web 服务通常只需要这一个。
+</Note>
+
+## 只读根文件系统
+
+攻击者进入容器后的第一件事往往是写入恶意程序。只读根文件系统可以拦住这一步。
+
+```bash
+# 根文件系统只读,用 tmpfs 提供可写的 /tmp
+docker run -d --name web \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  nginx
+```
+
+应用确实需要写数据的目录,单独挂载 volume。这样攻击面只剩挂载点。
+
+<Steps>
+  <Step title="确认应用的写入路径">
+    先正常跑容器,用 `docker diff` 找出它写入了哪些目录。
+  </Step>
+  <Step title="为这些路径准备挂载">
+    数据目录挂 volume,临时目录挂 tmpfs。
+  </Step>
+  <Step title="加上 --read-only 重启验证">
+    应用报错说明还有遗漏的写路径,补齐挂载再试。
+  </Step>
+</Steps>
+
+## 镜像安全
+
+镜像是供应链攻击的入口。三条基本规则:
+
+1. 固定版本,不用 `latest`。`latest` 随时可能变,也无法审计。
+2. 用官方镜像或可信来源的镜像。
+3. 上线前扫描漏洞。
+
+```bash
+# 固定具体版本号
+docker pull nginx:1.27.2
+
+# 用 docker scout 扫描镜像漏洞
+docker scout cves nginx:1.27.2
+
+# 用 trivy 扫描,CI 中常用
+trivy image nginx:1.27.2
+
+# 只报告高危和严重漏洞
+trivy image --severity HIGH,CRITICAL nginx:1.27.2
+```
+
+<Tip>
+  把 `trivy image` 加进 CI 流水线。发现严重漏洞时让构建失败,漏洞就进不了生产。
+</Tip>
+
+## 守护进程安全
+
+Docker 守护进程以 root 运行。能访问 `docker.sock` 就等于拿到了宿主机的 root。
+
+```bash
+# 危险:把 docker.sock 挂进容器,等于给容器宿主机 root 权限
+docker run -v /var/run/docker.sock:/var/run/docker.sock some-image
+```
+
+<Warning>
+  不要把 `docker.sock` 挂载进任何不完全信任的容器。不要在没有 TLS 的情况下开放 Docker 远程 API 的 2375 端口。开放远程 API 必须配置 TLS 双向认证,使用 2376 端口。
+</Warning>
+
+## 敏感信息管理
+
+密码和密钥不要写进 `ENV`,也不要写进 Dockerfile。它们会留在镜像层里,任何人拿到镜像都能提取。
+
+```bash
+# 反例:密码留在镜像层和环境变量里,inspect 就能看到
+docker run -e DB_PASSWORD=secret123 app
+```
+
+正确做法是使用 secrets 管理。Docker Swarm 提供 secrets 机制,Kubernetes 有 Secret 资源。单机环境可以把密钥放进权限收紧的文件,再用 bind mount 挂进容器。
+
+```bash
+# 密钥文件只读挂载,权限设为 600
+chmod 600 ./db_password.txt
+docker run -d \
+  -v $(pwd)/db_password.txt:/run/secrets/db_password:ro \
+  app
+```
+
+## 安全清单
+
+上线前逐项检查:
+
+| 项目 | 检查点 | 达成方式 |
+| --- | --- | --- |
+| 用户 | 不以 root 运行 | `--user` 或 Dockerfile `USER` |
+| 能力 | 最小化 capability | `--cap-drop ALL` 再按需 add |
+| 文件系统 | 根文件系统只读 | `--read-only` 加 tmpfs |
+| 镜像 | 固定版本并扫描 | 具体 tag 加 `trivy image` |
+| 守护进程 | 不暴露 sock 和裸 API | 不挂 `docker.sock`,API 走 TLS |
+| 密钥 | 不进镜像和环境变量 | secrets 或只读文件挂载 |
+| 资源 | 有内存 CPU 上限 | `--memory` 和 `--cpus` |
+
+## 延伸阅读
+
+- [Docker 镜像](/docker/docker-镜像):镜像分层与构建安全
+- [Docker 资源限制](/docker/docker-资源限制):限制资源也是安全手段
+- [Docker 生产实践](/docker/docker-生产实践):生产环境加固完整方案
+- [Kubernetes 安全](/kubernetes/kubernetes-安全):RBAC 与 Pod 安全标准

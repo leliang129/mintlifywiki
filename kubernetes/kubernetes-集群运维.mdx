@@ -1,0 +1,134 @@
+---
+title: "Kubernetes 集群运维"
+description: "kubeadm 集群生命周期、证书、etcd 备份、节点维护与监控日志体系"
+---
+
+集群搭起来只是开始。本章讲日常运维的核心工作:扩缩节点、版本升级、证书轮换、etcd 备份、监控与日志。
+
+## kubeadm 集群生命周期
+
+`kubeadm init` 完成初始化后,集群的日常生命周期操作围绕节点和版本展开。
+
+### 添加节点
+
+```bash
+# 在控制平面生成新的 join 命令(token 过期后重新生成)
+kubeadm token create --print-join-command
+
+# 在新节点上执行输出的命令
+kubeadm join 192.168.1.10:6443 --token <token> \
+  --discovery-token-ca-cert-hash sha256:<hash>
+```
+
+### 升级集群
+
+<Steps>
+  <Step title="升级控制平面节点">
+    先升级第一个控制平面节点。更新 `kubeadm` 包后执行 `kubeadm upgrade plan` 查看可升级版本,确认后用 `kubeadm upgrade apply v1.30.x` 应用。然后升级该节点的 `kubelet` 和 `kubectl` 并重启 kubelet。
+  </Step>
+  <Step title="升级其余控制平面节点">
+    逐个执行 `kubeadm upgrade node`,再升级 `kubelet`。一次只处理一个节点,保证控制平面始终有法定人数。
+  </Step>
+  <Step title="升级工作节点">
+    先 `kubectl drain` 驱逐负载,执行 `kubeadm upgrade node`,升级 `kubelet` 并重启,最后 `kubectl uncordon` 恢复调度。
+  </Step>
+  <Step title="验证集群状态">
+    用 `kubectl get nodes` 确认所有节点版本一致且状态为 `Ready`。
+  </Step>
+</Steps>
+
+<Warning>
+  升级只能逐个小版本进行,例如 v1.28 → v1.29 → v1.30,不能跨版本跳跃。
+</Warning>
+
+## 证书管理与轮换
+
+kubeadm 签发的集群证书默认有效期一年,到期前必须轮换。
+
+```bash
+# 查看所有证书有效期
+kubeadm certs check-expiration
+
+# 轮换全部证书(会重启控制平面组件)
+kubeadm certs renew all
+```
+
+<Note>
+  升级 kubeadm 集群时证书会自动轮换。不升级的年份里,要手动执行 `renew` 并记录进运维日历。
+</Note>
+
+## etcd 备份与恢复
+
+etcd 存着集群的全部状态,备份它就是备份整个集群。
+
+```bash
+# 备份:在控制平面节点执行
+ETCDCTL_API=3 etcdctl snapshot save /backup/etcd-$(date +%F).db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+# 恢复:指定新数据目录
+ETCDCTL_API=3 etcdctl snapshot restore /backup/etcd-2024-01-01.db \
+  --data-dir=/var/lib/etcd-restore
+```
+
+恢复后修改 etcd 静态 Pod 清单的 `--data-dir` 指向新目录,等待 kubelet 拉起即可。
+
+<Tip>
+  备份应定时执行并异地保存。写一条 cron 任务,配合快照校验 `etcdctl snapshot status`。
+</Tip>
+
+## 节点日常维护
+
+维护一台节点的标准流程:
+
+```bash
+# 1. 封锁节点,禁止调度新 Pod
+kubectl cordon node-1
+
+# 2. 驱逐节点上的 Pod(自动重建到其他节点)
+kubectl drain node-1 --ignore-daemonsets --delete-emptydir-data
+
+# 3. 执行维护:升级内核、更换硬件等
+
+# 4. 恢复调度
+kubectl uncordon node-1
+```
+
+## 集群监控
+
+- **metrics-server**:提供 `kubectl top` 和 HPA 所需的基础指标,用官方清单一键部署。
+- **Prometheus + Grafana**:生产标配。推荐用 `kube-prometheus-stack` Helm Chart 部署,一次获得节点、组件、应用三层监控和告警规则。
+
+```bash
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  -n monitoring --create-namespace
+```
+
+## 日志体系
+
+Kubernetes 日志分三层:
+
+1. **节点日志**:`journalctl -u kubelet` 查看系统组件日志。
+2. **容器日志**:`kubectl logs` 读取 stdout/stderr,文件落在节点的 `/var/log/containers`。
+3. **集群事件**:`kubectl get events` 记录调度与生命周期事件,默认只保留一小时。
+
+生产环境用 EFK(Elasticsearch + Fluent Bit + Kibana)或更轻量的 Loki + Grafana 做日志集中采集。
+
+## 常用巡检命令清单
+
+| 检查项 | 命令 |
+| ------ | ---- |
+| 控制平面健康(替代已废弃的 `get componentstatuses`) | `kubectl get --raw='/readyz?verbose'` |
+| 节点状态与资源 | `kubectl get nodes -o wide`、`kubectl top nodes` |
+| 证书有效期 | `kubeadm certs check-expiration` |
+| 系统 Pod 状态 | `kubectl get pods -n kube-system` |
+| 近期异常事件 | `kubectl get events -A --sort-by=.lastTimestamp` |
+| etcd 健康 | `etcdctl endpoint health` |
+
+## 延伸阅读
+
+- [Kubernetes 架构](/kubernetes/kubernetes-架构)
+- [Kubernetes 故障排查](/kubernetes/kubernetes-故障排查)

@@ -1,0 +1,172 @@
+---
+title: "Docker 容器"
+description: "掌握容器生命周期、docker run 参数、重启策略与运行中容器的诊断方法"
+---
+
+## 容器生命周期
+
+容器从创建到删除会经历几种状态。文字版状态流转如下:
+
+```text
+docker create / docker run
+        ↓
+    created ──docker start──▶ running
+                                │  ▲
+                     docker pause│  │docker unpause
+                                ▼  │
+                             paused
+        running ──docker stop / 进程退出──▶ exited
+        exited ──docker start──▶ running
+        created / exited ──docker rm──▶ 删除
+```
+
+关键点:`running` 状态的容器不能直接删除,必须先停止,或者用 `docker rm -f` 强制删除。
+
+## docker run 常用参数
+
+| 参数 | 作用 | 示例 |
+| --- | --- | --- |
+| `-d` | 后台运行(守护模式) | `docker run -d nginx` |
+| `-it` | 交互模式并分配终端,常组合使用 | `docker run -it ubuntu bash` |
+| `--name` | 指定容器名称 | `docker run --name web nginx` |
+| `-p` | 端口映射,宿主机端口:容器端口 | `docker run -p 8080:80 nginx` |
+| `-v` | 挂载数据卷,宿主机路径:容器路径 | `docker run -v /data:/app/data nginx` |
+| `-e` | 设置环境变量 | `docker run -e TZ=Asia/Shanghai nginx` |
+| `--restart` | 设置重启策略 | `docker run --restart always nginx` |
+| `--rm` | 容器退出后自动删除 | `docker run --rm ubuntu echo hi` |
+
+一个组合示例:
+
+```bash
+docker run -d \
+  --name redis \
+  -p 6379:6379 \
+  -v redis-data:/data \
+  -e TZ=Asia/Shanghai \
+  --restart always \
+  redis:7
+```
+
+<Tip>
+  `--rm` 适合一次性任务和调试。生产环境的长期服务不要使用 `--rm`,否则容器退出后就找不回来了。
+</Tip>
+
+## 重启策略对比
+
+| 策略 | 含义 | 适用场景 |
+| --- | --- | --- |
+| `no` | 默认策略,退出后不重启 | 一次性任务 |
+| `always` | 无论退出原因,总是重启;Docker 守护进程启动时也会拉起 | 大多数生产服务 |
+| `on-failure` | 仅在非正常退出时重启,可加重试次数上限 | 可能偶发崩溃的任务 |
+| `unless-stopped` | 类似 `always`,但手动停止后不会随守护进程拉起 | 想保留手动停止控制权的服务 |
+
+设置示例:
+
+```bash
+docker run -d --restart on-failure:5 myapp
+```
+
+表示非正常退出时最多重试 5 次。
+
+## 进入运行中的容器
+
+用 `docker exec` 在容器内执行命令。最常见的是打开一个交互式 Shell:
+
+```bash
+docker exec -it web bash
+```
+
+精简镜像(如 alpine)里没有 `bash`,改用 `sh`:
+
+```bash
+docker exec -it web sh
+```
+
+<Note>
+  `docker exec` 启动的是容器内的附加进程。退出这个 Shell 不会影响容器主进程的运行。
+</Note>
+
+## 查看与诊断
+
+### 容器列表
+
+```bash
+docker ps -a
+```
+
+加 `-a` 显示包括已停止在内的所有容器。
+
+### 详细信息
+
+`docker inspect` 输出容器的完整 JSON 配置。配合 `jq` 提取常用字段:
+
+```bash
+# 查看容器 IP 地址
+docker inspect web | jq '.[0].NetworkSettings.IPAddress'
+
+# 查看重启策略
+docker inspect web | jq '.[0].HostConfig.RestartPolicy'
+
+# 查看挂载信息
+docker inspect web | jq '.[0].Mounts'
+```
+
+### 进程与资源
+
+```bash
+# 查看容器内进程
+docker top web
+
+# 实时查看资源占用(CPU、内存、网络、磁盘)
+docker stats
+```
+
+## 停止与删除
+
+`docker stop` 与 `docker kill` 的区别:
+
+- `docker stop` 先发 `SIGTERM`,给应用优雅退出的机会。默认等待 10 秒后再发 `SIGKILL` 强杀。
+- `docker kill` 直接发送信号,默认是 `SIGKILL`,进程立即被杀掉。
+
+```bash
+docker stop web          # 优雅停止
+docker kill web          # 强制杀掉
+docker rm web            # 删除已停止的容器
+docker rm -f web         # 强制删除运行中的容器
+```
+
+批量清理所有已停止的容器:
+
+```bash
+docker container prune
+```
+
+<Warning>
+  `docker container prune` 会删除所有已停止的容器,且不可恢复。执行前确认没有还需要保留的现场。
+</Warning>
+
+## 容器内进程模型
+
+容器主进程是 PID 1。PID 1 在 Linux 中有特殊语义:它默认不处理未注册的信号,也需要负责回收僵尸子进程。
+
+直接用应用做 PID 1,可能出现收不到 `SIGTERM`、无法优雅退出的问题。
+
+解决方案是在容器中使用轻量级 init 进程,例如 `tini` 或 `dumb-init`:
+
+```bash
+docker run --init -d myapp
+```
+
+`--init` 会让 Docker 自动注入 `tini` 作为 PID 1,应用成为其子进程,信号转发和僵尸进程回收都由 `tini` 处理。
+
+<Tip>
+  配合 `--init` 使用 `docker stop`,绝大多数应用都能实现优雅退出,不需要修改代码。
+</Tip>
+
+## 延伸阅读
+
+- [Docker 基础](/docker/docker-基础):容器与镜像的基本概念
+- [Docker 镜像](/docker/docker-镜像):构建运行容器所需的镜像
+- [Docker 资源限制](/docker/docker-资源限制):限制容器 CPU 与内存
+- [Docker 故障排查](/docker/docker-故障排查):容器异常的排查套路
+- [Kubernetes 基础](/kubernetes/kubernetes-基础):容器管理的进阶形态

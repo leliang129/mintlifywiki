@@ -1,0 +1,145 @@
+---
+title: "Kubernetes 生产实践"
+description: "生产就绪清单、高可用拓扑、发布最佳实践、资源规划与 GitOps 落地建议"
+---
+
+把应用跑上生产,比拼的是细节。本章汇总上线前必须落实的清单、拓扑选择与发布规范。
+
+## 生产就绪检查清单
+
+### 高可用
+
+| 检查项 | 标准 |
+| ------ | ---- |
+| 控制平面 | 至少 3 个节点,跨可用区 |
+| etcd | 奇数节点(3 或 5),独立磁盘 |
+| 应用副本 | 关键服务至少 2 副本,反亲和打散 |
+| 中断容忍 | 配置 PodDisruptionBudget |
+
+### 资源
+
+| 检查项 | 标准 |
+| ------ | ---- |
+| requests | 所有容器必配 |
+| limits | 内存必配,CPU 视情况 |
+| namespace 配额 | ResourceQuota 防失控 |
+
+### 安全
+
+| 检查项 | 标准 |
+| ------ | ---- |
+| RBAC | 最小权限,禁用默认绑定 |
+| Pod 安全 | 启用 restricted 或 baseline 标准 |
+| 镜像 | 固定版本、扫描、私有仓库 |
+
+### 可观测
+
+| 检查项 | 标准 |
+| ------ | ---- |
+| 指标 | Prometheus + Grafana + 告警 |
+| 日志 | 集中采集,EFK 或 Loki |
+| 追踪 | 按需接入 OpenTelemetry |
+
+## 控制平面与 etcd 高可用拓扑
+
+两种主流拓扑:
+
+- **堆叠式(Stacked)**:etcd 与控制平面组件跑在同一组节点上。部署简单,3 台机器起步,适合大多数场景。
+- **外部 etcd(External)**:etcd 独立成集群,与控制平面解耦。隔离性更好、可单独扩缩,但要维护更多机器。
+
+<Note>
+  中小规模选堆叠式。当 etcd I/O 成为瓶颈,或需要独立保护数据层时,再考虑外部 etcd。
+</Note>
+
+## 应用发布最佳实践
+
+### 健康检查:readiness 与 liveness 的区别
+
+- **readinessProbe**:失败时把 Pod 摘出 Service 流量,但不重启。用于「暂时不能接客」。
+- **livenessProbe**:失败时重启容器。用于「已经病了,重开治百病」。
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  periodSeconds: 5
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 15   # 给应用留足启动时间
+```
+
+<Warning>
+  两个探针不要指向同一个会检查下游依赖的接口。下游抖动会触发 liveness 连环重启,放大故障。
+</Warning>
+
+### PodDisruptionBudget
+
+PDB 保证主动运维(drain、升级)时始终有最少可用副本:
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: myapp-pdb
+spec:
+  minAvailable: 1        # 至少保留 1 个可用副本,也可用 maxUnavailable
+  selector:
+    matchLabels:
+      app: myapp
+```
+
+### 优雅停机
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 30   # 给应用 30 秒收尾
+  containers:
+    - name: app
+      lifecycle:
+        preStop:
+          exec:
+            command: ["/bin/sh", "-c", "sleep 5"]  # 等待流量摘除生效
+```
+
+Pod 删除时先执行 `preStop`,再发 SIGTERM,超时后 SIGKILL。应用要捕获 SIGTERM 完成在途请求。
+
+## 资源规划建议
+
+- **requests 必配**:它是调度的依据,不配 requests 的 Pod 会被随意堆叠,节点超载时最先被驱逐。
+- **limit 策略**:内存 limit 必须配(防 OOM 拖垮节点);CPU limit 谨慎配,过紧会导致 throttling。
+- **LimitRange**:给 namespace 设置容器默认 requests/limits,兜底忘配的应用。
+- **ResourceQuota**:限制 namespace 总资源,防止单个团队吃光集群。
+
+## GitOps 与 CI/CD
+
+两个主流 GitOps 工具:
+
+- **ArgoCD**:带 Web 界面,可视化好,适合团队协作。
+- **Flux**:更轻量,纯 CRD 驱动,适合平台工程深度定制。
+
+声明式发布流程:代码合并进 main → CI 构建镜像并更新 Git 仓库中的清单 → GitOps 工具检测到差异自动同步到集群。集群状态永远以 Git 为准,禁止手动 `kubectl apply` 漂移配置。
+
+## 多环境管理
+
+- **namespace 划分**:小团队按环境分(`dev`/`staging`/`prod`),配合 RBAC 和 ResourceQuota 隔离。
+- **Kustomize**:适合环境间差异小的场景,用 overlay 覆盖补丁,原生集成在 `kubectl -k`。
+- **Helm**:适合复杂应用和需要对外分发的场景,用 values 文件区分环境。
+
+<Tip>
+  内部多环境优先 Kustomize,要交付给外部用户或依赖复杂编排再选 Helm。
+</Tip>
+
+## 升级与容量规划经验法则
+
+- **版本支持策略**:社区维护最近 3 个小版本(N-2),生产集群保持在支持窗口内,每年至少升级一次。
+- **预留缓冲**:节点资源按峰值负载的 60%~70% 规划,预留 30% 以上缓冲应对突发和节点故障重建。
+- **容量推演**:用 `kubectl top` 和 Prometheus 历史数据推算增长曲线,提前一个季度规划扩容。
+
+## 延伸阅读
+
+- [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维)
+- [Kubernetes 故障排查](/kubernetes/kubernetes-故障排查)
+- [Kubernetes 安全](/kubernetes/kubernetes-安全)

@@ -1,0 +1,131 @@
+---
+title: "Docker 资源限制"
+description: "用 --memory 和 --cpus 限制容器资源,防止单个容器拖垮宿主机"
+---
+
+## 为什么必须限制资源
+
+容器默认没有任何资源限制。一个容器可以申请全部内存,占满所有 CPU 核心。
+
+内存泄漏的服务会吃光宿主机内存。死循环的进程会占满所有 CPU。结果是宿主机和其他容器一起变慢甚至崩溃。
+
+<Warning>
+  生产环境的每一个容器都应该设置内存上限。这是成本最低、收益最大的稳定性措施。
+</Warning>
+
+## 内存限制
+
+```bash
+# 限制容器最多使用 512MB 内存
+docker run -d --name app --memory 512m nginx
+
+# 同时限制内存和 swap 总量
+# --memory-swap 是 内存 + swap 的总上限
+docker run -d --name app2 \
+  --memory 512m \
+  --memory-swap 1g \
+  nginx
+```
+
+`--memory-swap` 与 `--memory` 的关系:`--memory-swap` 减去 `--memory` 就是可用的 swap 大小。两者相等表示禁用 swap。
+
+### OOM Killer 行为
+
+容器内存用超上限时,Linux 的 OOM Killer 会直接杀掉容器内的进程。容器退出码是 137。
+
+```bash
+# 查看容器是否因 OOM 被杀,true 即被杀
+docker inspect app --format='OOMKilled: {{.State.OOMKilled}}'
+
+# 查看退出码,137 通常就是被 OOM 杀掉
+docker inspect app --format='ExitCode: {{.State.ExitCode}}'
+
+# 查看内核 OOM 日志
+dmesg | grep -i "killed process"
+```
+
+<Note>
+  OOM 杀的是容器内存占用最大的进程。它不会提前警告,进程直接消失。排查「容器无故重启」时先查 OOM。
+</Note>
+
+## CPU 限制
+
+| 参数 | 作用 | 示例 |
+| --- | --- | --- |
+| `--cpus` | 最多使用的 CPU 核数,可为小数 | `--cpus 1.5` |
+| `--cpu-shares` | CPU 竞争时的权重,默认 1024 | `--cpu-shares 512` |
+| `--cpuset-cpus` | 绑定到指定 CPU 核心 | `--cpuset-cpus 0,1` |
+
+```bash
+# 最多用 1.5 个核
+docker run -d --name web --cpus 1.5 nginx
+
+# 权重 512,争抢时只有默认容器一半的 CPU 时间
+docker run -d --name batch --cpu-shares 512 busybox md5sum /dev/zero
+
+# 只允许使用 0 号和 1 号核心
+docker run -d --name pinned --cpuset-cpus 0,1 nginx
+```
+
+<Tip>
+  `--cpu-shares` 只在 CPU 争抢时生效。CPU 空闲时低权重容器照样可以用满。
+</Tip>
+
+## 验证限制生效
+
+```bash
+# 实时查看所有容器的资源占用
+docker stats
+
+# 查看内存上限,单位是字节
+docker inspect app --format='Memory: {{.HostConfig.Memory}}'
+
+# 查看 CPU 限制相关配置
+docker inspect app | grep -i -E "memory|nano_cpus|cpuset"
+```
+
+`docker stats` 输出里的 `MEM USAGE / LIMIT` 一列直接显示用量与上限的比例。
+
+## Compose 文件里的资源限制
+
+```yaml
+services:
+  web:
+    image: nginx
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+```
+
+<Note>
+  `deploy.resources` 在 Swarm 模式下原生生效。普通 `docker compose up` 也会识别 limits。较旧的 Compose v2 写法是顶层 `mem_limit` 和 `cpus`。
+</Note>
+
+## 与 Kubernetes 的概念对照
+
+Docker 的资源限制概念在 Kubernetes 里几乎一一对应。
+
+| Docker | Kubernetes | 含义 |
+| --- | --- | --- |
+| `--memory` | `resources.limits.memory` | 内存硬上限 |
+| `--cpus` | `resources.limits.cpu` | CPU 硬上限 |
+| 无直接对应 | `resources.requests` | 调度时保证的资源量 |
+| `--cpu-shares` | requests 换算出的 cpu shares | CPU 争抢权重 |
+
+理解 Docker 资源限制后,Kubernetes 的 requests 和 limits 只是同一思想的调度器版本。
+
+## blkio 与 IO 限制
+
+磁盘 IO 也可以用 `--device-read-bps`、`--device-write-bps` 等参数限速。这类 blkio 参数在日志爆炸或备份任务场景下有用,日常用得少,知道存在即可。
+
+## 延伸阅读
+
+- [Docker 容器](/docker/docker-容器):容器运行参数总览
+- [Docker 日志与监控](/docker/docker-日志与监控):持续观测资源使用情况
+- [Docker 生产实践](/docker/docker-生产实践):生产环境的完整配置清单
+- [Kubernetes 调度与资源](/kubernetes/kubernetes-调度与资源):requests 与 limits 深入讲解

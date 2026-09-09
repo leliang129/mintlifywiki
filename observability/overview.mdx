@@ -1,0 +1,36 @@
+---
+title: "可观测性概述"
+description: "指标、日志、告警三大支柱,以及 Prometheus 生态组件选型"
+---
+
+可观测性(Observability)回答一个问题:**系统内部现在是什么状态,为什么**。本栏目整理云原生环境下监控、日志与告警的落地实践。
+
+## 三大支柱
+
+| 支柱 | 回答的问题 | 代表组件 |
+| ---- | ---- | ---- |
+| 指标 Metrics | 系统是否正常,趋势如何 | Prometheus、Grafana |
+| 日志 Logging | 发生了什么,细节是什么 | Loki、EFK |
+| 追踪 Tracing | 请求经过了哪些环节,慢在哪 | Tempo、Jaeger |
+
+三者互补:指标告诉你"出事了",日志告诉你"具体是什么事",追踪告诉你"事发生在哪一环"。
+
+## Prometheus 生态组件
+
+| 组件 | 职责 |
+| ---- | ---- |
+| Prometheus | 指标采集、存储与查询(PromQL) |
+| Alertmanager | 告警分组、去重、路由与通知 |
+| Grafana | 指标可视化看板,支持多数据源 |
+| node-exporter | 宿主机指标采集(CPU、内存、磁盘) |
+| cAdvisor | 容器指标采集,见 [Docker 日志与监控](/docker/docker-日志与监控) |
+
+## 学习路径建议
+
+1. 先理解容器与编排的监控基础:[Docker 日志与监控](/docker/docker-日志与监控)、[Kubernetes 集群运维](/kubernetes/kubernetes-集群运维)。
+2. 再按组件深入:采集(Prometheus)→ 展示(Grafana)→ 告警(Alertmanager)。
+3. 生产落地时注意指标的**基数控制**和告警的**分级降噪**。
+
+<Note>
+  各组件的系列文档正在整理中,会陆续上线。
+</Note>

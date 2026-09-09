@@ -1,0 +1,175 @@
+---
+title: "Kubernetes 工作负载"
+description: "对比 Deployment、StatefulSet、DaemonSet、Job 与 CronJob,并掌握滚动更新与回滚操作。"
+---
+
+工作负载(Workload)是在集群上运行的应用。Kubernetes 提供多种工作负载资源,对应不同的应用形态。本文帮你选对资源,并掌握最常用的运维操作。
+
+## 工作负载资源选型
+
+| 资源 | 适用场景 | 典型例子 |
+| --- | --- | --- |
+| Deployment | 无状态应用,副本可互换 | Web 服务、API 网关 |
+| StatefulSet | 有状态应用,需要稳定身份 | MySQL、Kafka、ZooKeeper |
+| DaemonSet | 每个节点跑一个副本 | 日志采集、监控 Agent |
+| Job | 一次性任务,跑完即结束 | 数据迁移、批量计算 |
+| CronJob | 周期性定时任务 | 每日报表、定时清理 |
+
+<Tip>
+  选型时先问两个问题:Pod 之间是否可以互换?任务是否需要长期运行?答案能帮你快速排除大部分选项。
+</Tip>
+
+## Deployment 详解
+
+Deployment 是最常用的工作负载资源。它通过 ReplicaSet 管理 Pod 副本,并提供滚动更新和回滚能力。
+
+### 滚动更新策略
+
+Deployment 默认使用滚动更新(RollingUpdate)。新版本的 Pod 逐步替换旧版本,服务不中断。两个关键参数控制更新节奏:
+
+- `maxSurge`:更新期间最多可以超出期望副本数的数量。可以是数字或百分比。
+- `maxUnavailable`:更新期间最多允许多少个副本不可用。
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+spec:
+  replicas: 6
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2          # 最多额外启动 2 个 Pod
+      maxUnavailable: 1    # 最多允许 1 个 Pod 不可用
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: myapp:v2
+          ports:
+            - containerPort: 8080
+```
+
+### 修订历史
+
+`revisionHistoryLimit` 控制保留多少个历史 ReplicaSet 用于回滚。默认值为 10。
+
+```yaml
+spec:
+  revisionHistoryLimit: 5  # 只保留最近 5 个历史版本
+```
+
+### 回滚操作
+
+```bash
+# 查看发布历史
+kubectl rollout history deployment/web-app
+
+# 回滚到上一个版本
+kubectl rollout undo deployment/web-app
+
+# 回滚到指定版本
+kubectl rollout undo deployment/web-app --to-revision=3
+
+# 观察滚动更新进度
+kubectl rollout status deployment/web-app
+```
+
+<Warning>
+  回滚本质上是把 Pod 模板切回旧版本。如果新版本中包含数据库结构变更,回滚前必须确认旧代码能兼容新数据结构。
+</Warning>
+
+## StatefulSet 要点
+
+StatefulSet 用于有状态应用。它与 Deployment 的关键区别有三点。
+
+**稳定的网络标识**。Pod 的名称是固定且有编号的,例如 `mysql-0`、`mysql-1`。Pod 重建后名称不变,DNS 记录也不变。
+
+**有序扩缩容**。扩容时按编号顺序逐个创建,前一个就绪后才开始下一个。缩容时按编号倒序删除。这个特性对数据库主从集群很重要。
+
+**依赖 Headless Service**。StatefulSet 需要搭配一个 `clusterIP: None` 的 Headless Service,为每个 Pod 提供独立的 DNS 记录:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-headless
+spec:
+  clusterIP: None  # Headless 模式,不分配虚拟 IP
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+```
+
+配置后,`mysql-0.mysql-headless` 这样的域名可以直接定位到具体 Pod。
+
+## DaemonSet 典型用途
+
+DaemonSet 保证每个节点上运行一个 Pod 副本。新节点加入集群时,它会自动在新节点上部署 Pod。
+
+典型场景是节点级的基础设施组件:
+
+- 日志采集 Agent,例如 Fluent Bit,收集每个节点上的容器日志。
+- 监控 Agent,例如 Node Exporter,采集节点指标。
+- 网络插件,例如 Calico 的节点组件。
+
+## Job 与 CronJob
+
+### Job
+
+Job 运行一次性任务,直到任务成功完成。如果 Pod 失败,Job 会根据策略重试。
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+spec:
+  completions: 1        # 需要成功完成 1 次
+  backoffLimit: 3       # 最多重试 3 次
+  template:
+    spec:
+      restartPolicy: Never  # Job 中只允许 Never 或 OnFailure
+      containers:
+        - name: migrate
+          image: myapp:v2
+          command: ["./migrate.sh"]
+```
+
+### CronJob
+
+CronJob 按 Cron 表达式周期性地创建 Job。下面的示例每天凌晨 2 点执行一次数据备份:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-backup
+spec:
+  schedule: "0 2 * * *"  # 分 时 日 月 周,每天 02:00 执行
+  successfulJobsHistoryLimit: 3   # 保留 3 个成功记录
+  failedJobsHistoryLimit: 1       # 保留 1 个失败记录
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: backup-tool:latest
+              command: ["/backup.sh"]
+```
+
+## 延伸阅读
+
+- [Kubernetes 基础](/kubernetes/kubernetes-基础):回顾 kubectl 操作和核心对象。
+- [Kubernetes 架构](/kubernetes/kubernetes-架构):理解 Controller 如何调谐工作负载。
+- [Kubernetes 网络](/kubernetes/kubernetes-网络):了解如何为工作负载暴露访问入口。

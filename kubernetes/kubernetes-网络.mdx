@@ -1,0 +1,152 @@
+---
+title: "Kubernetes 网络"
+description: "理解网络模型、Service、CoreDNS、Ingress 与 NetworkPolicy"
+---
+
+Kubernetes 网络让任意 Pod 之间可以直接通信。本文讲解网络模型、Service、DNS、Ingress 和网络策略。
+
+## 网络模型的三条基本要求
+
+Kubernetes 对网络实现只提要求,不限定方案:
+
+1. Pod 之间无需 NAT 即可互通,跨节点也一样。
+2. 节点与 Pod 之间无需 NAT 即可互通。
+3. Pod 自己看到的 IP 与别人看到的 IP 一致。
+
+满足这三条的方案都叫 CNI 插件。
+
+## Pod 网络与 CNI 插件
+
+CNI 插件负责给 Pod 分配 IP、打通跨节点网络。常见选择:
+
+| 插件 | 数据面 | 特点 |
+| ---- | ---- | ---- |
+| Calico | BGP 或 VXLAN | 网络策略功能强,生产常用 |
+| Cilium | eBPF | 性能高,可观测性好 |
+| Flannel | VXLAN | 简单轻量,适合学习和小集群 |
+
+## Service 四种类型
+
+Service 为一组 Pod 提供稳定入口。四种类型对比:
+
+| 类型 | 暴露范围 | 用途 |
+| ---- | ---- | ---- |
+| `ClusterIP` | 仅集群内部 | 内部服务间调用,默认类型 |
+| `NodePort` | 节点 IP + 固定端口 | 测试时临时对外暴露 |
+| `LoadBalancer` | 云厂商外部负载均衡器 | 生产环境对外服务 |
+| `ExternalName` | 返回一个 CNAME 记录 | 把外部服务映射进集群 DNS |
+
+NodePort 示例:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-np
+spec:
+  type: NodePort
+  selector:
+    app: web
+  ports:
+    - port: 80          # Service 端口
+      targetPort: 80    # Pod 端口
+      nodePort: 30080   # 节点端口,范围 30000-32767
+```
+
+## kube-proxy 的两种模式
+
+kube-proxy 负责把 Service 的虚拟 IP 转发到后端 Pod。
+
+- **iptables 模式**:默认模式。用 iptables 规则做转发,规则多时匹配变慢,且只支持随机负载均衡。
+- **IPVS 模式**:用内核 IPVS 做转发,支持多种调度算法,大规模集群性能更好。
+
+```bash
+# 查看 kube-proxy 当前模式
+kubectl logs -n kube-system -l k8s-app=kube-proxy | grep -i mode
+```
+
+## CoreDNS 服务发现
+
+CoreDNS 为每个 Service 分配 DNS 名称。格式:
+
+```
+service名称.命名空间.svc.cluster.local
+```
+
+同命名空间内直接用 Service 名访问即可:
+
+```bash
+# 在 Pod 内测试 DNS 解析
+kubectl run dns-test --rm -it --image=busybox:1.36 -- nslookup web-np
+```
+
+## Ingress 与 Ingress Controller
+
+Ingress 按域名和路径把 HTTP 流量路由到不同 Service。Ingress 只是规则,需要 Ingress Controller(如 nginx-ingress)真正执行。
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.example.com        # 按域名匹配
+      http:
+        paths:
+          - path: /users           # 按路径匹配
+            pathType: Prefix
+            backend:
+              service:
+                name: user-svc
+                port:
+                  number: 80
+          - path: /orders
+            pathType: Prefix
+            backend:
+              service:
+                name: order-svc
+                port:
+                  number: 80
+```
+
+<Tip>
+  先确认集群已安装 Ingress Controller,否则 Ingress 资源不会生效。用 `kubectl get pods -n ingress-nginx` 检查。
+</Tip>
+
+## NetworkPolicy 入门
+
+NetworkPolicy 限制哪些 Pod 可以互相通信。默认集群内全部放行。
+
+下面的示例只允许带 `app=frontend` 标签的 Pod 访问后端:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: backend          # 策略作用于 backend Pod
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend # 只允许 frontend 访问
+      ports:
+        - port: 8080
+```
+
+<Warning>
+  NetworkPolicy 需要 CNI 插件支持,Calico 和 Cilium 支持,Flannel 不支持。
+</Warning>
+
+## 延伸阅读
+
+- [Kubernetes 基础](/kubernetes/kubernetes-基础)
+- [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维)
+- [Kubernetes 调度与资源](/kubernetes/kubernetes-调度与资源)

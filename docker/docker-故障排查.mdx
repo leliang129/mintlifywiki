@@ -1,0 +1,180 @@
+---
+title: "Docker 故障排查"
+description: "系统化的 Docker 故障排查方法论:退出码速查、容器起不来、端口冲突、磁盘撑爆、网络不通、DNS 与镜像拉取失败。"
+---
+
+容器出问题不要慌。Docker 的故障大多有固定套路,按方法论走一遍,十有八九能定位。本文给你一套排查流程和常见故障的逐个击破方案。
+
+## 排查方法论
+
+核心原则:**先看状态,再查日志,由表及里**。
+
+<Steps>
+  <Step title="看容器状态">
+    用 `docker ps -a` 看容器在不在、什么状态、退出码多少,重点看 STATUS 列,例如 `Exited (137)`。
+  </Step>
+  <Step title="查容器详情">
+    用 `docker inspect` 看配置和环境。挂载对不对、环境变量漏没漏、OOMKilled 是不是 true,都在这里。
+
+    ```bash
+    # 只关心退出原因时,直接过滤字段
+    docker inspect --format='{{.State.OOMKilled}} {{.State.ExitCode}}' my-app
+    ```
+  </Step>
+  <Step title="读容器日志">
+    用 `docker logs --tail 200 -t my-app` 看应用自己说了什么。大部分应用错误日志里都有答案。
+  </Step>
+  <Step title="进容器验证">
+    日志看不出问题就执行 `docker exec -it my-app sh` 进容器手动验证,DNS、网络、文件权限都可以现场试。
+  </Step>
+</Steps>
+
+## 容器退出码速查表
+
+`docker ps -a` 里 STATUS 列的数字是退出码,它直接告诉你大方向。
+
+| 退出码 | 含义 | 常见原因 |
+| --- | --- | --- |
+| 0 | 正常退出 | 进程自己跑完了,脚本任务常见 |
+| 1 | 应用错误 | 应用抛异常退出,查日志 |
+| 126 | 命令不可执行 | 文件没执行权限,或 Entrypoint 指向目录 |
+| 127 | 命令不存在 | Entrypoint 或 CMD 拼错了 |
+| 137 | 被 SIGKILL 杀掉 | OOM 或手动 `docker kill` |
+| 139 | 段错误 | 程序内存访问越界,多为应用 bug |
+
+<Tip>
+  看到 137 先查 `docker inspect` 的 OOMKilled 字段。是 true 就说明内存超限被杀,去加内存限额或优化应用。
+</Tip>
+
+## 容器起不来
+
+症状是 `docker run` 后容器秒退,或一直重启。先按方法论走,看退出码、查日志。最常见的原因:
+
+```bash
+# 1. Entrypoint 或 CMD 写错,退出码 127
+docker logs my-app
+# 日志显示:executable file not found
+# 2. 启动命令执行完就退出,退出码 0:容器内主进程结束 = 容器结束
+# 3. 依赖的配置文件没挂上,应用报错退出
+docker inspect my-app | grep -A 10 Mounts
+```
+
+<Note>
+  容器的设计是「一个前台进程」。守护进程式写法都要改成前台运行,例如 nginx 加 `-g "daemon off;"`。
+</Note>
+
+## 端口冲突
+
+症状是 `docker run` 报错 `bind: address already in use`,意思是宿主机端口被占了。
+
+```bash
+# 1. 找出谁占了 8080 端口
+sudo lsof -i :8080
+
+# 2. 要么停掉占端口的进程,要么换个宿主机端口
+docker run -d -p 8081:80 nginx:1.25
+```
+
+Compose 项目里还可能是旧容器没删干净,先 `docker compose down` 再 `docker compose up -d`。
+
+## 磁盘撑爆
+
+镜像、容器、构建缓存都在吃磁盘,症状是构建失败、容器写文件报错。先看占用分布:
+
+```bash
+docker system df      # 总览:镜像、容器、卷、缓存各占多少
+docker system df -v   # 明细:逐个镜像看大小
+```
+
+再按需清理:
+
+```bash
+# 清理停止的容器、悬空镜像、未用网络
+docker system prune
+
+# 连没用的卷一起清,数据会丢,慎用
+docker system prune --volumes
+
+# 只清构建缓存,构建失败磁盘满时最常用
+docker builder prune
+```
+
+<Warning>
+  `prune` 系命令不可逆。删掉的镜像要重新拉,删掉的卷数据直接丢失,执行前确认没有重要数据。
+</Warning>
+
+根治办法:构建加 `.dockerignore`、用多阶段构建压镜像体积、给日志配轮转,参见 [Docker 日志与监控](/docker/docker-日志与监控)。
+
+## 网络不通
+
+容器间网络不通,按这条链路排查:
+
+```bash
+# 1. 确认两个容器在同一自定义网络里
+docker network inspect my-net
+
+# 2. 自定义网络有内置 DNS,用容器名互 ping
+docker exec app-a ping app-b# 3. ping 得通但服务连不上,查目标端口是否在监听
+docker exec app-b sh -c "netstat -tlnp 2>/dev/null || ss -tlnp"
+# 4. 都正常就查宿主机防火墙
+sudo iptables -L -n | grep DOCKER
+```
+
+<Note>
+  默认 `bridge` 网络上的容器不能用容器名互相解析,只能用 IP。需要服务发现就建自定义网络,这是最常见的坑。
+</Note>
+
+## DNS 解析失败
+
+症状是容器里域名解析不了,提示 `Temporary failure in name resolution`。两种修法。
+
+容器级临时修:
+
+```bash
+# 给单个容器指定 DNS 服务器
+docker run -d --dns 8.8.8.8 --dns 114.114.114.114 nginx:1.25
+```
+
+Daemon 级全局修,编辑 `/etc/docker/daemon.json`:
+
+```json
+{
+  "dns": ["8.8.8.8", "114.114.114.114"]
+}
+```
+
+改完执行 `sudo systemctl restart docker` 生效。公司内网环境通常要填内网 DNS 地址。
+
+## 镜像拉取失败
+
+`docker pull` 失败,按三类原因排查。
+
+第一类是网络问题,报错含 `timeout`、`connection refused`。国内环境配置镜像加速器:
+
+```json
+{
+  "registry-mirrors": ["https://你的加速器地址"]
+}
+```
+
+第二类是凭证问题,报错含 `unauthorized`。私有仓库先登录再拉:
+
+```bash
+docker login registry.example.com
+docker pull registry.example.com/team/app:1.0
+```
+
+第三类是名字拼错,报错含 `not found` 或 `manifest unknown`:
+
+```bash
+docker pull nginx:1.25   # 对
+docker pull ngixn        # 错,名字拼写
+docker pull myapp        # 错,仓库里没有 latest tag
+```
+
+## 延伸阅读
+
+- [Docker 日志与监控](/docker/docker-日志与监控):用日志和监控手段定位问题
+- [Docker 网络](/docker/docker-网络):网络模型详解,网络故障的根
+- [Docker 存储](/docker/docker-存储):卷与挂载,磁盘问题的背景知识
+- [Kubernetes 故障排查](/kubernetes/kubernetes-故障排查):集群环境的排查方法论

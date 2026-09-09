@@ -1,0 +1,37 @@
+---
+title: "自动化运维概述"
+description: "CI/CD、GitOps 与运维自动化的整体版图"
+---
+
+自动化运维的目标:把重复的部署、发布、巡检工作交给流水线与声明式工具,人只做决策。本栏目整理从代码提交到生产发布的自动化实践。
+
+## 自动化版图
+
+| 领域 | 代表组件 | 解决什么 |
+| ---- | ---- | ---- |
+| CI/CD 流水线 | GitLab CI、GitHub Actions | 提交即构建、测试、产出镜像 |
+| GitOps 发布 | Argo CD | 以 Git 仓库为唯一事实来源,自动同步到集群 |
+| 渐进式交付 | Argo Rollouts | 金丝雀、蓝绿发布,自动分析与回滚 |
+| 配置管理 | Ansible | 批量主机配置与变更 |
+| 巡检与 SOP | 脚本 + 定时任务 | 日常巡检、备份、清理的自动化 |
+
+## 推荐的演进路径
+
+<Steps>
+  <Step title="先手工跑通">
+    用 kubectl 或 Compose 手工完成一次完整部署,理解每个环节,见 [Kubernetes 系列](/kubernetes/kubernetes-基础)。
+  </Step>
+  <Step title="流水线固化">
+    用 CI 把构建、测试、镜像推送固化成流水线,做到"构建即打 tag,产物不可变"。
+  </Step>
+  <Step title="GitOps 发布">
+    用 Argo CD 接管部署:合并代码即发布,集群状态自动向仓库期望状态收敛。
+  </Step>
+  <Step title="渐进式交付">
+    引入 Argo Rollouts 做金丝雀发布,配合指标自动分析,出问题自动回滚。
+  </Step>
+</Steps>
+
+<Note>
+  各组件的系列文档正在整理中,会陆续上线。
+</Note>

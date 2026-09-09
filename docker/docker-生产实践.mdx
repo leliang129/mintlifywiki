@@ -1,0 +1,175 @@
+---
+title: "Docker 生产实践"
+description: "Docker 上生产前的完整清单:镜像规范、容器运行规范、单机部署边界,以及从 Compose 走向 Kubernetes 的路径。"
+---
+
+开发环境跑起来不算完,生产环境有另一套标准。本文是一份落地指南:检查清单、镜像与容器规范、单机部署的边界,以及走向 Kubernetes 的路径。
+
+## 生产就绪检查清单
+
+上线前对着这五类过一遍。
+
+**镜像**
+
+| 检查项 | 标准 |
+| --- | --- |
+| 版本 | 固定 tag,禁止 `latest` |
+| 体积 | 多阶段构建,剔掉构建依赖 |
+| 用户 | 非 root 运行 |
+| 健康检查 | 配 `HEALTHCHECK` |
+| 构建上下文 | 有 `.dockerignore` |
+
+**容器**
+
+| 检查项 | 标准 |
+| --- | --- |
+| 重启策略 | `--restart unless-stopped` |
+| 资源限额 | CPU、内存限额必配 |
+| 只读性 | 配置文件挂只读卷 |
+
+**日志**
+
+| 检查项 | 标准 |
+| --- | --- |
+| 输出 | 应用日志走 stdout/stderr |
+| 轮转 | `max-size`、`max-file` 必配 |
+| 采集 | 重要业务接入日志平台 |
+
+**资源**
+
+| 检查项 | 标准 |
+| --- | --- |
+| 磁盘 | 定期清理,监控使用率 |
+| 监控 | cAdvisor 或等效方案 |
+| 告警 | 容器退出、OOM 有通知 |
+
+**安全**
+
+| 检查项 | 标准 |
+| --- | --- |
+| 镜像来源 | 只用可信仓库,扫漏洞 |
+| 密钥 | 不写进镜像,用环境变量或 secret |
+| 权限 | 不加 `--privileged`,能力最小化 |
+
+## 镜像规范
+
+镜像是发布的单元,规范要从源头抓起。
+
+```dockerfile
+# 1. 固定版本 tag,禁止 latest
+FROM node:20.11-alpine AS builder
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# 2. 多阶段构建,最终镜像只带产物
+FROM node:20.11-alpine
+WORKDIR /app
+
+# 3. 非 root 用户运行
+RUN addgroup -S app && adduser -S app -G app
+USER app
+
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+
+# 4. 健康检查
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD wget -qO- http://localhost:3000/health || exit 1
+
+CMD ["node", "dist/main.js"]
+```
+
+别忘了 `.dockerignore`,它决定构建上下文里有什么:
+
+```text
+node_modules
+.git
+*.log
+dist
+.env
+```
+
+<Tip>
+  `.dockerignore` 有两个作用:减小构建上下文加快构建;防止 `.env` 这类敏感文件被打进镜像。
+</Tip>
+
+## 容器运行规范
+
+容器怎么跑和镜像怎么建同样重要,三条铁律:重启策略必配、资源限额必配、日志轮转必配。
+
+```bash
+docker run -d \
+  --restart unless-stopped \
+  --memory 512m \
+  --cpus 1.0 \
+  --log-opt max-size=10m \
+  --log-opt max-file=3 \
+  --name app myapp:1.2.0
+```
+
+`unless-stopped` 表示异常退出会拉起、手动 stop 不会。不限内存的容器能把宿主机拖垮,不配轮转的日志能把磁盘写满。细节参考 [Docker 资源限制](/docker/docker-资源限制) 和 [Docker 日志与监控](/docker/docker-日志与监控)。
+
+## 单机部署的边界
+
+单机 Docker 加 Compose 能走很远,但要知道边界。适合单机的场景:中小团队内部系统、流量稳定的单体应用、演示测试环境,几台机器以内 Compose 完全够用。
+
+出现以下信号就该考虑编排了:
+
+- 单机资源到顶,需要多机调度
+- 要求零停机发布和自动回滚
+- 服务数量变多,需要服务发现和负载均衡
+- 要求故障自愈,机器挂了容器自动迁移
+
+<Note>
+  编排解决的是「多机、多实例、高可用」问题。应用本身就是单实例的话,上 Kubernetes 是过度设计。
+</Note>
+
+## 从 Compose 走向 Kubernetes
+
+Compose 的概念在 Kubernetes 里都有对应物,迁移没有想象中难。
+
+| Compose 概念 | Kubernetes 概念 | 说明 |
+| --- | --- | --- |
+| `services` | Deployment | 管理无状态应用的副本 |
+| `volumes` | PVC | 持久化存储声明 |
+| `networks` | Service / Ingress | 服务发现与流量入口 |
+| `depends_on` | 探针与 init 容器 | 启动顺序与就绪控制 |
+| `restart` | restartPolicy | 重启策略 |
+| `environment` | ConfigMap / Secret | 配置与密钥管理 |
+
+迁移路径建议分步走:先把 Compose 服务拆成 Deployment 和 Service,再把有状态部分迁到 PVC,最后接 Ingress 对外暴露。详细概念见 [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载)。
+
+## CI/CD 中的镜像构建
+
+CI/CD 流水线的镜像环节记住三句话:构建即打 tag、推送仓库、不可变发布。
+
+```bash
+# 1. 构建即打 tag:用版本号或 git commit,从不用 latest
+docker build -t registry.example.com/team/app:1.2.0 .
+# 再打一个 commit 短哈希 tag,方便溯源
+docker build -t registry.example.com/team/app:a1b2c3d .
+
+# 2. 推送到镜像仓库
+docker push registry.example.com/team/app:1.2.0
+```
+
+不可变发布的意思是:一个 tag 对应一个不变的镜像,要改就发新版本。
+
+<Tip>
+  不可变发布让回滚极其简单:重新部署旧 tag 就行。这也是生产禁止 latest 的原因——它永远指向「最新的什么」,无法回滚。
+</Tip>
+
+## 与 Kubernetes 系列教程的衔接
+
+本文是 Docker 系列的收尾。想继续深入生产级容器化,推荐按这个顺序读 Kubernetes 系列:[Kubernetes 基础](/kubernetes/kubernetes-基础) 入门核心概念,[Kubernetes 工作负载](/kubernetes/kubernetes-工作负载) 掌握 Deployment 与 StatefulSet,最后读 [Kubernetes 生产实践](/kubernetes/kubernetes-生产实践) 对照集群环境的生产清单。
+
+## 延伸阅读
+
+- [Docker 安全](/docker/docker-安全):镜像扫描与权限最小化
+- [Docker Compose](/docker/docker-compose):单机多容器编排
+- [Docker 故障排查](/docker/docker-故障排查):上线后的问题定位方法
+- [Kubernetes 生产实践](/kubernetes/kubernetes-生产实践):更大规模的生产标准

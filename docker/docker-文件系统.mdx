@@ -1,0 +1,149 @@
+---
+title: "Docker 文件系统"
+description: "理解 Docker 的联合文件系统:镜像层、init 层、容器层与 merge 层"
+---
+
+每个容器看起来都有完整的文件系统,但磁盘上并没有为每个容器存一份完整拷贝。这背后是**联合文件系统(UnionFS)**在起作用。理解它的分层结构,你才能明白为什么镜像能复用、为什么容器删了数据就没了。
+
+## 联合文件系统与 overlay2
+
+UnionFS 的核心思想:把多个目录**分层叠加**,对外呈现为一个统一的文件系统视图。
+
+Docker 默认的存储驱动是 `overlay2`,它基于 Linux 内核的 OverlayFS 实现。查看你的驱动:
+
+```bash
+docker info | grep "Storage Driver"
+# Storage Driver: overlay2
+```
+
+## 容器的四层目录结构
+
+容器运行时,overlay2 为它准备四个目录。用 `docker inspect` 可以看到:
+
+```bash
+docker inspect demo --format='{{json .GraphDriver.Data}}' | jq
+```
+
+输出类似:
+
+```json
+{
+  "LowerDir": "/var/lib/docker/overlay2/xxx-init/diff:/var/lib/docker/overlay2/l1/diff:/var/lib/docker/overlay2/l2/diff",
+  "MergedDir": "/var/lib/docker/overlay2/xxx/merged",
+  "UpperDir": "/var/lib/docker/overlay2/xxx/diff",
+  "WorkDir": "/var/lib/docker/overlay2/xxx/work"
+}
+```
+
+| 目录 | 读写性 | 内容 |
+| ---- | ---- | ---- |
+| `LowerDir` | 只读 | 镜像的所有层 + init 层,多层用冒号分隔 |
+| `UpperDir` | 可写 | 容器层,容器的一切修改都写在这里 |
+| `WorkDir` | 内部使用 | OverlayFS 的工作目录,保证写操作原子性 |
+| `MergedDir` | 统一视图 | **merge 层**,容器进程实际看到的根文件系统 |
+
+## 镜像层(lowerdir)
+
+镜像层是只读的,来自 `docker build` 的每条指令。同一台宿主机上,多个镜像共享相同的基础层,磁盘上只存一份。
+
+查看一个镜像的分层:
+
+```bash
+docker history nginx
+# 每一行就是一层,SIZE 是该层增加的体积
+```
+
+## init 层
+
+`LowerDir` 里那个带 `-init` 后缀的目录就是 **init 层**。它是容器启动时 Docker 在镜像层之上注入的一个特殊只读层,内容只有几个容器专属的配置文件:
+
+- `/etc/hostname`:容器的主机名
+- `/etc/hosts`:容器的 hosts 记录
+- `/etc/resolv.conf`:DNS 解析配置
+
+这些文件每个容器都不同,不能打进镜像,但又必须出现在容器的文件系统里。Docker 用 init 层把它们"垫"在镜像层之上,既不污染镜像,又让容器启动即拥有正确配置。
+
+## 容器层(upperdir)
+
+容器层是**唯一可写**的一层。容器内新建、修改、删除文件,全部落在这里:
+
+- **新建文件**:直接写进容器层
+- **修改镜像层文件**:先把文件从只读层复制上来(copy-up),再修改
+- **删除镜像层文件**:在容器层写一个 whiteout 标记,把下层文件"遮住",而不是真的删除只读层
+
+## merge 层(mergeddir)
+
+merge 层把只读层和容器层叠加后的**统一视图**。容器进程看到的 `/` 就是它。
+
+同名文件的覆盖规则:**上层优先**。容器层(upperdir)的文件会覆盖镜像层(lowerdir)的同名文件;whiteout 标记则让下层的文件"消失"。
+
+```bash
+# 宿主机上直接看一眼 merge 层,和容器里看到的完全一致
+sudo ls /var/lib/docker/overlay2/xxx/merged
+```
+
+## 写时复制(Copy-on-Write)
+
+修改只读层文件的完整过程:
+
+<Steps>
+  <Step title="发起写入">
+    容器内进程修改一个来自镜像层的文件,比如 `sed -i` 改配置。
+  </Step>
+  <Step title="copy-up">
+    OverlayFS 把该文件从 lowerdir 复制到 upperdir。文件越大,这一步越慢,但**只在首次修改时发生**。
+  </Step>
+  <Step title="写入容器层">
+    修改落在 upperdir 的副本上,镜像层原件保持不变。之后对该文件的读写都直接走容器层。
+  </Step>
+</Steps>
+
+<Note>
+  写时复制保证了镜像层的不可变性:一百个容器共用一个镜像层,谁也改不到它。代价是首次修改大文件有复制开销。
+</Note>
+
+## 实地查看一个容器的分层
+
+<Steps>
+  <Step title="启动一个实验容器">
+
+    ```bash
+    docker run -d --name demo nginx
+    ```
+  </Step>
+  <Step title="找到它的分层目录">
+
+    ```bash
+    docker inspect demo --format='{{json .GraphDriver.Data}}' | jq
+    # 记下 LowerDir / UpperDir / MergedDir
+    ```
+  </Step>
+  <Step title="在容器里制造一个改动">
+
+    ```bash
+    docker exec demo sh -c 'echo hello > /tmp/from-container.txt'
+    ```
+  </Step>
+  <Step title="在宿主机上验证">
+
+    ```bash
+    # 文件出现在容器层(upperdir)
+    sudo cat /var/lib/docker/overlay2/xxx/diff/tmp/from-container.txt
+    # hello
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  macOS 用户注意:Docker Desktop 把 `/var/lib/docker` 放在一个 Linux 虚拟机里,需要用 `docker run -it --rm --privileged --pid=host justincormack/nsenter1` 进入 VM 后才能访问。
+</Tip>
+
+## 与数据持久化的关系
+
+容器层(upperdir)的生命周期和容器绑定——`docker rm` 之后,这一层连同里面的数据一起删除。这就是为什么生产数据必须放到 Volume 里,见 [Docker 存储](/docker/docker-存储)。
+
+## 延伸阅读
+
+- [Docker 镜像](/docker/docker-镜像):镜像分层的构建视角
+- [Docker 存储](/docker/docker-存储):用 Volume 持久化数据
+- [Docker 生产实践](/docker/docker-生产实践):分层结构对生产部署的影响

@@ -1,0 +1,145 @@
+---
+title: "Docker 基础"
+description: "从零认识 Docker:核心概念、安装方法与第一个容器上手实践"
+---
+
+## Docker 是什么
+
+Docker 是一个容器化平台。它把应用和依赖打包成标准化的单元,称为容器(Container)。容器可以在任何安装了 Docker 的机器上以相同方式运行。
+
+Docker 解决了经典的「在我机器上能跑」问题。开发、测试、生产环境使用同一个镜像,行为完全一致。
+
+## 容器与虚拟机对比
+
+容器和虚拟机(Virtual Machine)都提供隔离的运行环境,但实现方式完全不同。
+
+| 维度 | 容器 | 虚拟机 |
+| --- | --- | --- |
+| 隔离级别 | 进程级隔离,共享宿主机内核 | 硬件级虚拟化,独立内核 |
+| 启动速度 | 秒级甚至毫秒级 | 数十秒到数分钟 |
+| 体积 | 镜像通常几十到几百 MB | 镜像通常几个 GB |
+| 资源开销 | 几乎无额外开销 | 每个虚拟机都要跑完整操作系统 |
+| 密度 | 单机可运行几十上百个 | 单机通常只能跑几个 |
+
+<Note>
+  容器共享宿主机内核,所以 Linux 容器不能直接运行在 Windows 或 macOS 内核上。Docker Desktop 通过内置轻量虚拟机解决这一问题。
+</Note>
+
+## 核心概念:镜像、容器、仓库
+
+理解 Docker 只需要先理解三个概念。
+
+- **镜像 Image**:只读的应用打包模板。包含代码、运行时、依赖库和配置。
+- **容器 Container**:镜像的运行实例。可以被启动、停止、删除。
+- **仓库 Registry**:镜像的存储和分发中心。Docker Hub 是最常用的公共仓库。
+
+三者的关系可以类比:镜像是类(Class),容器是对象实例,仓库是代码仓库(类似 GitHub)。
+
+典型的工作流是:从仓库拉取镜像(`docker pull`),用镜像启动容器(`docker run`),本地构建镜像后推送回仓库(`docker push`)。
+
+## 安装 Docker
+
+### macOS
+
+macOS 上推荐安装 Docker Desktop。可以从官网下载安装包,也可以用 Homebrew:
+
+```bash
+brew install --cask docker
+```
+
+安装后启动 Docker Desktop 应用,等待菜单栏图标变为稳定状态。
+
+### Linux
+
+Linux 可以使用官方提供的一键安装脚本:
+
+```bash
+curl -fsSL https://get.docker.com | sh
+```
+
+安装完成后,把当前用户加入 `docker` 用户组,避免每次都用 `sudo`:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+重新登录后生效。
+
+### 验证安装
+
+无论哪个平台,都用同一条命令验证:
+
+```bash
+docker version
+```
+
+能同时看到 Client 和 Server 的版本信息,说明安装成功。
+
+<Tip>
+  如果 `docker version` 只显示 Client 部分并报错,说明 Docker 守护进程没有启动。macOS 上打开 Docker Desktop 即可,Linux 上执行 `sudo systemctl start docker`。
+</Tip>
+
+## 第一个容器
+
+下面用 Nginx 镜像完整走一遍容器的生命周期。
+
+<Steps>
+  <Step title="启动容器">
+    执行以下命令,以后台模式启动一个 Nginx 容器,并把宿主机的 80 端口映射到容器的 80 端口:
+
+    ```bash
+    docker run -d -p 80:80 --name web nginx
+    ```
+
+    首次运行会自动从 Docker Hub 拉取 `nginx` 镜像。
+  </Step>
+  <Step title="浏览器访问">
+    打开浏览器访问 `http://localhost`,能看到 Nginx 的欢迎页面,说明容器正常运行。
+  </Step>
+  <Step title="查看运行中的容器">
+    ```bash
+    docker ps
+    ```
+
+    输出中可以看到容器 ID、镜像名、端口映射和容器名称 `web`。
+  </Step>
+  <Step title="停止并删除容器">
+    ```bash
+    docker stop web
+    docker rm web
+    ```
+
+    先停止,再删除。容器删除后,容器内的数据也随之消失。
+  </Step>
+</Steps>
+
+<Warning>
+  容器是临时的。删除容器会丢失容器内产生的所有数据。需要持久化的数据请使用数据卷,参见[Docker 存储](/docker/docker-存储)。
+</Warning>
+
+## 常用命令速查表
+
+| 命令 | 作用 | 示例 |
+| --- | --- | --- |
+| `docker run` | 创建并启动容器 | `docker run -d -p 80:80 nginx` |
+| `docker ps` | 查看容器列表,加 `-a` 显示全部 | `docker ps -a` |
+| `docker stop` | 停止容器 | `docker stop web` |
+| `docker rm` | 删除容器 | `docker rm web` |
+| `docker images` | 查看本地镜像 | `docker images` |
+| `docker rmi` | 删除镜像 | `docker rmi nginx` |
+| `docker logs` | 查看容器日志 | `docker logs -f web` |
+| `docker exec` | 在运行中的容器内执行命令 | `docker exec -it web bash` |
+| `docker pull` | 拉取镜像 | `docker pull redis:7` |
+| `docker build` | 构建镜像 | `docker build -t myapp .` |
+
+<Tip>
+  记不住参数时随时使用 `--help`,例如 `docker run --help`。Docker 的帮助信息非常完整。
+</Tip>
+
+## 延伸阅读
+
+- [Docker 镜像](/docker/docker-镜像):深入镜像分层与 Dockerfile 编写
+- [Docker 容器](/docker/docker-容器):容器生命周期与运行参数详解
+- [Docker 网络](/docker/docker-网络):容器之间如何通信
+- [Docker Compose](/docker/docker-compose):多容器应用一键编排
+- [Kubernetes 基础](/kubernetes/kubernetes-基础):容器编排的下一步

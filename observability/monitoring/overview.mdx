@@ -1,0 +1,34 @@
+---
+title: "Monitoring 概述"
+description: "以 Prometheus 为核心的指标监控体系"
+---
+
+指标监控回答"系统正不正常"。本小节整理以 Prometheus 为核心的采集、存储、展示与告警体系。
+
+## 组件分工
+
+| 组件 | 职责 |
+| ---- | ---- |
+| Prometheus | 指标采集、时序存储、PromQL 查询、告警规则评估 |
+| Grafana | 看板可视化,对接 Prometheus 等多种数据源 |
+| Alertmanager | 告警分组、去重、静默、路由到通知渠道 |
+| node-exporter | 宿主机指标(CPU、内存、磁盘、网络) |
+| cAdvisor / kube-state-metrics | 容器与 Kubernetes 对象指标 |
+
+## 监控方法论
+
+- **黄金四信号**:延迟、流量、错误、饱和度,服务监控的通用框架
+- **RED 方法**:Rate、Errors、Duration,面向请求驱动型服务
+- **USE 方法**:Utilization、Saturation、Errors,面向资源型组件
+
+## 落地要点
+
+- **基数控制**:高基数标签(如用户 ID 作 label)是 Prometheus 的内存杀手
+- **告警分级**:分 critical / warning,告警要可执行,避免狼来了
+- **与日志联动**:指标发现异常,跳到 [ELK](/observability/elk/overview) 查细节
+
+## 延伸阅读
+
+- [可观测性概述](/observability/overview)
+- [Docker 日志与监控](/docker/docker-日志与监控):容器监控基础
+- [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维):集群巡检与监控部署

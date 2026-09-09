@@ -1,0 +1,172 @@
+---
+title: "Kubernetes 安全"
+description: "从 API 访问控制到 Pod 安全与镜像安全,系统掌握 Kubernetes 安全防护"
+---
+
+Kubernetes 安全是一个纵深防御体系。本章按访问链路逐层讲解:谁能访问 API、Pod 能以什么权限运行、镜像从哪里来。
+
+## API 访问控制三段
+
+每个发到 API Server 的请求都要经过三道关卡:
+
+1. **认证(Authentication)**:确认你是谁。支持客户端证书、Bearer Token、ServiceAccount Token 等方式。
+2. **授权(Authorization)**:确认你能做什么。生产环境一律使用 RBAC 模式。
+3. **准入控制(Admission)**:对请求对象做最后的校验和修改,例如 `PodSecurity`、`LimitRanger`。
+
+<Note>
+  任何一段失败,请求都会被拒绝。排查权限问题时按「认证 → 授权 → 准入」的顺序逐段定位。
+</Note>
+
+## ServiceAccount 与 Token
+
+ServiceAccount 是 Pod 访问 API Server 的身份。每个 namespace 自带一个 `default` ServiceAccount。
+
+```bash
+# 创建 ServiceAccount
+kubectl create serviceaccount myapp-sa
+
+# 查看自动关联的 Secret(1.24 之后需手动创建 Token Secret)
+kubectl get serviceaccount myapp-sa -o yaml
+```
+
+Pod 中通过 `serviceAccountName` 指定身份:
+
+```yaml
+spec:
+  serviceAccountName: myapp-sa  # 不指定则使用 default
+  containers:
+    - name: app
+      image: myapp:v1
+```
+
+<Tip>
+  不需要访问 API 的 Pod,建议设置 `automountServiceAccountToken: false`,减少攻击面。
+</Tip>
+
+## RBAC 详解
+
+RBAC 的核心是四个对象:
+
+| 对象 | 作用域 | 说明 |
+| ---- | ------ | ---- |
+| `Role` | 单个 namespace | 定义命名空间内的权限 |
+| `ClusterRole` | 整个集群 | 定义集群级或跨命名空间权限 |
+| `RoleBinding` | 单个 namespace | 把 Role 或 ClusterRole 绑定给用户/组/ServiceAccount |
+| `ClusterRoleBinding` | 整个集群 | 把 ClusterRole 绑定到主体,集群范围生效 |
+
+### 示例:给开发者开 namespace 只读权限
+
+```yaml
+# 1. 定义只读 Role,只允许 get/list/watch
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: dev
+  name: dev-readonly
+rules:
+  - apiGroups: ["", "apps"]
+    resources: ["pods", "deployments", "services", "configmaps"]
+    verbs: ["get", "list", "watch"]  # 只读三件套
+---
+# 2. 把 Role 绑定给开发者用户
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: dev
+  name: dev-readonly-binding
+subjects:
+  - kind: User
+    name: zhangsan        # 开发者用户名,与认证体系对应
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: dev-readonly
+  apiGroup: rbac.authorization.k8s.io
+```
+
+验证权限是否生效:
+
+```bash
+# 检查 zhangsan 是否能在 dev 命名空间删除 Pod
+kubectl auth can-i delete pods --as=zhangsan -n dev
+```
+
+<Warning>
+  永远不要把 `cluster-admin` 绑定给普通用户或应用。权限最小化是第一原则。
+</Warning>
+
+## Pod 安全
+
+### Pod Security Standards
+
+Kubernetes 内置三档 Pod 安全标准,通过 namespace 标签启用准入控制:
+
+- **privileged**:不做任何限制,仅用于系统组件。
+- **baseline**:禁止已知的提权手段,兼顾兼容性。
+- **restricted**:最严格,强制非 root、只读根文件系统等最佳实践。
+
+```bash
+# 对 dev 命名空间强制 baseline 标准,违规直接拒绝
+kubectl label namespace dev pod-security.kubernetes.io/enforce=baseline
+```
+
+### securityContext 常用配置
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-app
+spec:
+  securityContext:
+    runAsNonRoot: true        # 禁止以 root 运行
+    runAsUser: 1000           # 指定运行 UID
+    fsGroup: 2000             # 卷文件的属组
+  containers:
+    - name: app
+      image: myapp:v1
+      securityContext:
+        allowPrivilegeEscalation: false   # 禁止提权
+        readOnlyRootFilesystem: true      # 根文件系统只读
+        capabilities:
+          drop: ["ALL"]                   # 丢弃全部 Linux capabilities
+```
+
+## 镜像安全
+
+### 私有仓库 imagePullSecrets
+
+```bash
+# 创建仓库凭证 Secret
+kubectl create secret docker-registry regcred \
+  --docker-server=registry.example.com \
+  --docker-username=deploy \
+  --docker-password=<密码>
+```
+
+```yaml
+spec:
+  imagePullSecrets:
+    - name: regcred   # 拉取私有镜像时使用
+  containers:
+    - name: app
+      image: registry.example.com/myapp:v1
+```
+
+镜像扫描(如 Trivy)与镜像签名(如 Cosign)应在 CI 流水线中完成,确保入集群的镜像无高危漏洞且来源可信。
+
+## 安全清单小结
+
+| 层面 | 关键动作 |
+| ---- | -------- |
+| API 访问 | 启用 RBAC,禁用匿名访问,审计日志开启 |
+| 身份 | 应用使用独立 ServiceAccount,关闭不必要的 Token 挂载 |
+| 权限 | 最小权限原则,不用 `cluster-admin` |
+| Pod | 启用 Pod Security Standards,配置 `securityContext` |
+| 镜像 | 私有仓库凭证、扫描、签名,固定版本不用 `latest` |
+| 网络 | 配合 NetworkPolicy 限制东西向流量 |
+
+## 延伸阅读
+
+- [Kubernetes 基础](/kubernetes/kubernetes-基础)
+- [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载)

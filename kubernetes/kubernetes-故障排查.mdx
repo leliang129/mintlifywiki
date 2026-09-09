@@ -1,0 +1,156 @@
+---
+title: "Kubernetes 故障排查"
+description: "从方法论到实战:Pod 异常状态、Service 不通、节点 NotReady 的完整排查套路"
+---
+
+排查的核心是快速缩小范围。本章给出一套可复用的方法论,再逐个击破最常见的故障场景。
+
+## 排查方法论:自顶向下
+
+<Steps>
+  <Step title="确认集群层">
+    用 `kubectl get nodes` 和 `kubectl get --raw='/readyz'` 确认控制平面和节点整体健康。集群层有问题就先修集群,别在 Pod 上浪费时间。
+  </Step>
+  <Step title="定位到节点">
+    `kubectl describe node` 查看节点 Conditions,确认是否有 `DiskPressure`、`MemoryPressure` 或 `NotReady`。
+  </Step>
+  <Step title="定位到 Pod">
+    `kubectl get pods -A -o wide` 找到异常 Pod,用 `kubectl describe pod` 看事件,事件里通常直接写着原因。
+  </Step>
+  <Step title="深入容器">
+    `kubectl logs` 看应用输出,`kubectl exec` 进容器验证环境和网络。
+  </Step>
+</Steps>
+
+## 万能命令组合
+
+| 命令 | 用途 |
+| ---- | ---- |
+| `kubectl get` | 看对象当前状态,加 `-o wide` 看调度位置 |
+| `kubectl describe` | 看事件和详细状态,排查的第一站 |
+| `kubectl logs` | 看容器日志,加 `--previous` 看崩溃前的日志 |
+| `kubectl exec` | 进容器执行命令,验证 DNS、网络、文件 |
+| `kubectl get events` | 看集群事件,加 `-A` 全命名空间扫描 |
+
+```bash
+# 组合技:一键看异常 Pod 的描述和上次崩溃日志
+kubectl describe pod <pod> -n <ns>
+kubectl logs <pod> -n <ns> --previous
+```
+
+## Pod 常见状态故障逐个击破
+
+### Pending:Pod 一直无法调度
+
+**现象**:Pod 状态停留在 `Pending`,没有分配到节点。
+
+**原因**:资源不足、节点污点未容忍、PVC 未绑定。
+
+**处理**:
+
+```bash
+kubectl describe pod <pod>  # 看 Events 里的调度失败原因
+kubectl get pvc -n <ns>     # 确认 PVC 是否 Bound
+```
+
+按事件提示处理:资源不足就扩容节点或调小 `requests`;污点问题就加 `tolerations`;PVC 未绑定就检查 StorageClass 和 PV 供给。
+
+### ImagePullBackOff:镜像拉取失败
+
+**现象**:状态在 `ImagePullBackOff` 与 `ErrImagePull` 之间循环。
+
+**原因**:镜像名或标签写错、私有仓库缺凭证。
+
+**处理**:核对 `image` 字段拼写;私有镜像检查 `imagePullSecrets` 是否存在且凭证有效。
+
+### CrashLoopBackOff:容器反复崩溃
+
+**现象**:容器启动后立刻退出,重启次数不断增加。
+
+**原因**:应用自身报错、存活探针配错、启动命令有问题。
+
+**处理**:
+
+```bash
+kubectl logs <pod> --previous   # 看崩溃前的日志,通常就是答案
+kubectl describe pod <pod>      # 看 Exit Code 和探针失败记录
+```
+
+日志无输出时检查 `command`/`args` 是否正确;探针失败则放宽 `initialDelaySeconds` 给应用足够启动时间。
+
+### OOMKilled:内存超限被杀
+
+**现象**:Pod 被终止,`describe` 中 Reason 显示 `OOMKilled`,Exit Code 为 137。
+
+**原因**:容器实际内存超过 `limits.memory`,或节点内存耗尽。
+
+**处理**:调大内存 limit,或排查应用内存泄漏。Java 应用注意堆参数与容器 limit 匹配。
+
+<Warning>
+  `OOMKilled` 不是节点报错,是内核 OOM Killer 按 cgroup 限制杀容器。先看 limit,再看应用。
+</Warning>
+
+## Service 不通的排查链
+
+按顺序逐环验证:
+
+```bash
+# 1. endpoints 是否存在(空列表说明没有 Pod 被选中)
+kubectl get endpoints <svc> -n <ns>
+
+# 2. selector 是否匹配 Pod 标签
+kubectl get pods -n <ns> --show-labels
+kubectl get svc <svc> -n <ns> -o jsonpath='{.spec.selector}'
+
+# 3. kube-proxy 是否正常(看它有没有报错日志)
+kubectl logs -n kube-system -l k8s-app=kube-proxy --tail=50
+
+# 4. 是否有 NetworkPolicy 拦截
+kubectl get networkpolicy -n <ns>
+```
+
+<Tip>
+  在集群内起一个临时 Pod 测连通性:`kubectl run test --rm -it --image=busybox:1.28 -- wget -qO- <svc>:<port>`。
+</Tip>
+
+## 节点 NotReady 排查
+
+**现象**:`kubectl get nodes` 中节点状态为 `NotReady`。
+
+**原因**:kubelet 停止或报错、磁盘/内存压力、网络插件故障。
+
+**处理**:
+
+```bash
+# 登录节点查看 kubelet 日志
+journalctl -u kubelet -n 100 --no-pager
+
+# 检查系统资源
+df -h        # 磁盘是否写满,触发 DiskPressure
+free -m      # 内存压力
+systemctl status kubelet
+```
+
+最常见的是磁盘写满。清理镜像 `crictl rmi --prune` 和日志后,kubelet 通常自动恢复。
+
+## debug 工具:kubectl debug
+
+Kubernetes 1.25 起提供 Ephemeral Containers(临时容器),可以在不重启 Pod 的情况下注入调试容器:
+
+```bash
+# 向运行中的 Pod 注入一个调试容器,共享网络和进程命名空间
+kubectl debug -it <pod> --image=busybox:1.28 --target=<container> -- sh
+
+# 复制一个 Pod 副本用于调试,不影响原 Pod
+kubectl debug <pod> -it --copy-to=<pod>-debug --image=ubuntu -- bash
+```
+
+<Note>
+  临时容器无法配置资源限制,也不会被存活探针管理。用完即弃,不影响原应用。
+</Note>
+
+## 延伸阅读
+
+- [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维)
+- [Kubernetes 基础](/kubernetes/kubernetes-基础)
+- [Kubernetes 网络](/kubernetes/kubernetes-网络)

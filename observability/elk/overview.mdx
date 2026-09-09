@@ -1,0 +1,37 @@
+---
+title: "ELK 概述"
+description: "Elasticsearch + Logstash + Kibana 日志体系"
+---
+
+日志回答"具体发生了什么"。本小节整理 ELK / EFK 日志体系的组件分工、采集链路与使用规范。
+
+## 组件分工
+
+| 组件 | 职责 |
+| ---- | ---- |
+| Elasticsearch | 日志的存储与检索引擎 |
+| Logstash | 日志处理管道:解析、过滤、富化、转发 |
+| Kibana | 日志查询与可视化界面 |
+| Beats / Filebeat | 轻量采集器,部署在数据源旁 |
+
+**EFK 变体**:用 Fluentd 或 Fluent Bit 替换 Logstash 做采集与转发,资源占用更低,Kubernetes 场景更常见。
+
+## 典型采集链路
+
+```bash
+应用(stdout) → Filebeat → Logstash(解析/过滤) → Elasticsearch → Kibana
+```
+
+容器环境下更简单:应用日志写 stdout,由节点级采集器(Fluent Bit)直接收集,见 [Docker 日志与监控](/docker/docker-日志与监控)。
+
+## 落地要点
+
+- **结构化日志**:应用输出 JSON,字段统一(`level`、`msg`、`trace_id`),解析成本最低
+- **索引按天滚动**:配合 ILM 做冷热分层与定期删除,见 [Elasticsearch 概述](/middleware/elasticsearch/overview)
+- **写入 trace_id**:日志与链路打通,排查时从日志直接跳到 [Tracing](/observability/tracing/overview)
+
+## 延伸阅读
+
+- [可观测性概述](/observability/overview)
+- [Elasticsearch 概述](/middleware/elasticsearch/overview):引擎层的分片与运维
+- [Kubernetes 故障排查](/kubernetes/kubernetes-故障排查):日志驱动的问题定位

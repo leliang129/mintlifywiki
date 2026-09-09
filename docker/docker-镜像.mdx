@@ -1,0 +1,165 @@
+---
+title: "Docker 镜像"
+description: "深入理解镜像分层原理,掌握 Dockerfile 编写、构建发布与镜像瘦身"
+---
+
+## 镜像分层原理
+
+镜像(Image)由一组只读层(Layer)叠加而成。每一条 Dockerfile 指令通常生成一个新层。容器启动时,Docker 在镜像层之上再加一个可写层。
+
+分层带来两个核心优势:
+
+- **层复用**:多个镜像如果基于同一个基础镜像,相同的层在本地只存一份。拉取镜像时已有的层不会重复下载。
+- **写时复制 Copy-on-Write**:容器修改文件时,先把文件从只读层复制到可写层再修改。镜像本身永远不变。
+
+<Tip>
+  层的顺序直接影响构建缓存。变化频率低的指令(如安装系统依赖)应放在前面,变化频率高的指令(如复制代码)放在后面。
+</Tip>
+
+## Dockerfile 逐指令讲解
+
+Dockerfile 是定义镜像构建过程的文本文件。常用指令如下:
+
+| 指令 | 作用 |
+| --- | --- |
+| `FROM` | 指定基础镜像,必须是第一条有效指令 |
+| `WORKDIR` | 设置后续指令的工作目录 |
+| `COPY` | 从构建上下文复制文件到镜像 |
+| `ADD` | 类似 `COPY`,额外支持自动解压 tar 和远程 URL |
+| `RUN` | 在构建时执行命令,结果固化到新层中 |
+| `ENV` | 设置环境变量,构建期和运行期都生效 |
+| `ARG` | 定义构建参数,只在构建期生效 |
+| `EXPOSE` | 声明容器监听的端口,仅作文档说明 |
+| `CMD` | 容器启动时的默认命令 |
+| `ENTRYPOINT` | 容器启动时的入口命令 |
+
+<Note>
+  官方推荐优先使用 `COPY` 而不是 `ADD`。`ADD` 的自动解压行为不直观,容易踩坑。
+</Note>
+
+### CMD 与 ENTRYPOINT 的区别
+
+| 对比项 | `CMD` | `ENTRYPOINT` |
+| --- | --- | --- |
+| 定位 | 默认命令,可被覆盖 | 固定入口,不易被覆盖 |
+| `docker run` 追加参数的效果 | 整体替换 `CMD` | 作为参数追加给 `ENTRYPOINT` |
+| 典型用途 | 提供默认启动方式 | 把容器做成一个命令行工具 |
+
+两者可以组合使用:`ENTRYPOINT` 定命令,`CMD` 定默认参数。
+
+## 完整 Dockerfile 示例
+
+下面是一个 Node.js 应用的 Dockerfile:
+
+```dockerfile
+# 基础镜像,使用精简版 alpine 减小体积
+FROM node:20-alpine
+
+# 设置容器内工作目录
+WORKDIR /app
+
+# 定义构建参数,构建时可通过 --build-arg 覆盖
+ARG NODE_ENV=production
+ENV NODE_ENV=$NODE_ENV
+
+# 先复制依赖清单,利用构建缓存
+COPY package*.json ./
+
+# 安装依赖,只安装生产依赖
+RUN npm ci --omit=dev
+
+# 再复制应用源代码
+COPY . .
+
+# 声明应用监听端口
+EXPOSE 3000
+
+# 容器启动命令
+CMD ["node", "server.js"]
+```
+
+<Warning>
+  `CMD` 推荐使用 JSON 数组格式(exec 形式)。这样应用进程会成为 PID 1,能正常接收停止信号。Shell 形式会让命令变成 sh 的子进程。
+</Warning>
+
+## 构建与发布
+
+<Steps>
+  <Step title="构建镜像">
+    在 Dockerfile 所在目录执行:
+
+    ```bash
+    docker build -t myapp:1.0 .
+    ```
+
+    `-t` 指定镜像名称和标签,末尾的点表示构建上下文是当前目录。
+  </Step>
+  <Step title="打标签">
+    推送前需要给镜像加上仓库前缀:
+
+    ```bash
+    docker tag myapp:1.0 myregistry.example.com/myapp:1.0
+    ```
+  </Step>
+  <Step title="推送到镜像仓库">
+    ```bash
+    docker push myregistry.example.com/myapp:1.0
+    ```
+
+    推送到 Docker Hub 或私有仓库前,先用 `docker login` 登录。
+  </Step>
+</Steps>
+
+## 多阶段构建
+
+编译型语言(如 Go)只需要编译产物,不需要编译环境。多阶段构建把编译和运行拆到两个阶段:
+
+```dockerfile
+# 第一阶段:编译
+FROM golang:1.22 AS builder
+WORKDIR /src
+COPY . .
+RUN go build -o /bin/server ./cmd/server
+
+# 第二阶段:运行,只复制编译产物
+FROM alpine:3.20
+COPY --from=builder /bin/server /bin/server
+EXPOSE 8080
+CMD ["/bin/server"]
+```
+
+最终镜像不包含 Go 编译器和源代码,体积可以从近 1 GB 降到十几 MB。
+
+## 构建缓存与 .dockerignore
+
+Docker 按指令逐层缓存。某一层变化后,其后的所有层都会重新构建。
+
+`.dockerignore` 文件用于排除不需要进入构建上下文的文件,作用类似 `.gitignore`:
+
+```text
+node_modules
+.git
+*.log
+Dockerfile
+.dockerignore
+```
+
+排除无关文件有两个好处:加快上下文传输速度,避免本地文件变动意外使缓存失效。
+
+## 镜像瘦身最佳实践
+
+- 使用 `alpine` 或 `distroless` 等精简基础镜像
+- 合并相邻的 `RUN` 指令,减少层数
+- 同一个 `RUN` 中安装完立即清理缓存,例如 `apt-get clean`
+- 不安装编辑器、`curl` 等调试用工具,生产镜像用不上
+- 用 `.dockerignore` 排除无关文件
+- 编译型语言一律使用多阶段构建
+- 固定基础镜像版本,不要直接使用 `latest`
+
+## 延伸阅读
+
+- [Docker 基础](/docker/docker-基础):镜像、容器、仓库的概念回顾
+- [Docker 容器](/docker/docker-容器):镜像运行起来之后的管理
+- [Docker 存储](/docker/docker-存储):容器数据的持久化方案
+- [Docker 生产实践](/docker/docker-生产实践):镜像在 CI/CD 中的落地
+- [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载):镜像如何被编排运行

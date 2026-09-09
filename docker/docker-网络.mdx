@@ -1,0 +1,150 @@
+---
+title: "Docker 网络"
+description: "掌握 Docker 网络模式、端口映射、自定义网络与容器互联的完整实战指南"
+---
+
+## 为什么需要 Docker 网络
+
+容器之间默认互相隔离。容器与宿主机之间也有网络隔离。要对外提供服务,必须理解 Docker 的网络模型。
+
+Docker 在宿主机上虚拟出多种网络。容器启动时接入其中一种。不同网络模式决定了容器的连通性、隔离级别和端口规则。
+
+## 四种网络模式对比
+
+Docker 内置四种常用网络模式。用 `--network` 参数指定。
+
+| 模式 | 命令写法 | 特点 | 适用场景 |
+| --- | --- | --- | --- |
+| bridge | `--network bridge` | 默认模式,容器有独立 IP,通过 NAT 访问外网 | 绝大多数场景 |
+| host | `--network host` | 容器直接共享宿主机网络栈,无隔离 | 追求网络性能的服务 |
+| none | `--network none` | 容器没有任何网络接口 | 完全隔离的计算任务 |
+| container | `--network container:名字` | 与另一个容器共享网络命名空间 | Sidecar 辅助容器 |
+
+<Note>
+  host 模式下容器没有自己的 IP。容器监听的端口直接占用宿主机端口。`-p` 端口映射在 host 模式下无效。
+</Note>
+
+## 默认 bridge 与用户自定义 bridge
+
+Docker 安装后自带一个名为 `bridge` 的默认网络。你也可以用 `docker network create` 创建自定义 bridge 网络。
+
+两者有一个关键区别:**内置 DNS**。
+
+- 默认 `bridge` 网络没有容器名解析。容器之间只能用 IP 通信。
+- 用户自定义 bridge 网络内置 DNS 服务器。容器可以用容器名或网络别名互相解析。
+
+<Tip>
+  生产环境永远使用自定义 bridge 网络。容器重启后 IP 会变,容器名解析不受影响。
+</Tip>
+
+```bash
+# 查看默认网络
+docker network ls
+
+# 创建自定义 bridge 网络
+docker network create my-net
+```
+
+## 端口映射原理
+
+bridge 模式下容器的 IP 只在宿主机内部可达。外部访问需要端口映射。
+
+`-p` 参数的格式是 `宿主机端口:容器端口`。Docker 通过 iptables 规则把流量转发进容器。
+
+```bash
+# 把宿主机 8080 映射到容器 80
+docker run -d -p 8080:80 nginx
+
+# 映射到指定网卡地址,只允许本机访问
+docker run -d -p 127.0.0.1:8080:80 nginx
+
+# 映射多个端口
+docker run -d -p 8080:80 -p 8443:443 nginx
+
+# -P 大写:随机映射所有 EXPOSE 端口
+docker run -d -P nginx
+```
+
+<Warning>
+  `-p 8080:80` 默认绑定 `0.0.0.0`,对所有网卡开放。内网服务建议绑定 `127.0.0.1` 或内网地址。
+</Warning>
+
+## 容器互联实战
+
+下面演示两个容器在自定义网络中通过容器名互相 ping 通。
+
+<Steps>
+  <Step title="创建自定义网络">
+    ```bash
+    docker network create app-net
+    ```
+  </Step>
+  <Step title="启动两个容器接入该网络">
+    ```bash
+    # 第一个容器,名为 web
+    docker run -d --name web --network app-net nginx
+
+    # 第二个容器,名为 toolbox
+    docker run -d --name toolbox --network app-net busybox sleep 3600
+    ```
+  </Step>
+  <Step title="用容器名互相访问">
+    ```bash
+    # 在 toolbox 里 ping web,容器名会被内置 DNS 解析
+    docker exec toolbox ping -c 3 web
+
+    # 也可以用 curl 访问 web 的 80 端口
+    docker exec toolbox wget -qO- http://web
+    ```
+  </Step>
+  <Step title="验证 DNS 解析">
+    ```bash
+    # 查看容器名解析到的 IP
+    docker exec toolbox nslookup web
+    ```
+  </Step>
+</Steps>
+
+一个容器可以同时接入多个网络。运行中的容器可以用 `docker network connect` 动态加网。
+
+```bash
+# 把运行中的 web 再接入 my-net
+docker network connect my-net web
+```
+
+## docker network 命令速查
+
+| 命令 | 作用 |
+| --- | --- |
+| `docker network create my-net` | 创建网络 |
+| `docker network ls` | 列出所有网络 |
+| `docker network inspect my-net` | 查看网络详情与接入的容器 |
+| `docker network connect my-net web` | 把容器接入网络 |
+| `docker network disconnect my-net web` | 把容器从网络断开 |
+| `docker network rm my-net` | 删除网络 |
+| `docker network prune` | 清理未使用的网络 |
+
+## 跨主机网络
+
+单机的 bridge 网络只在一台宿主机内有效。跨主机通信需要 overlay 网络。overlay 网络是 Docker Swarm 的基础,生产环境更常见的方案是 Kubernetes 的网络模型。
+
+## 常见端口冲突处理
+
+启动时报错 `port is already allocated`,说明宿主机端口被占用。
+
+```bash
+# 查出谁占用了 8080
+lsof -i :8080
+
+# 换一个宿主机端口重新映射
+docker run -d -p 8081:80 nginx
+```
+
+冲突也可能来自旧容器。先 `docker ps -a` 找到占端口的旧容器,再 `docker stop` 或 `docker rm` 处理。
+
+## 延伸阅读
+
+- [Docker 容器](/docker/docker-容器):容器的生命周期管理
+- [Docker 存储](/docker/docker-存储):数据持久化的三种方式
+- [Docker Compose](/docker/docker-compose):用 YAML 编排多容器网络
+- [Kubernetes 网络](/kubernetes/kubernetes-网络):跨主机网络与服务发现

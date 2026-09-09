@@ -1,0 +1,143 @@
+---
+title: "Kubernetes 架构"
+description: "拆解控制平面与节点组件,理解一次 kubectl apply 背后的完整协作流程。"
+---
+
+理解 Kubernetes 架构,是排查问题和设计高可用集群的前提。本文逐个讲解集群中的组件,以及它们如何协同工作。
+
+## 集群整体架构
+
+一个 Kubernetes 集群由两部分组成:控制平面(Control Plane)和工作节点(Worker Node)。控制平面负责决策,工作节点负责干活。
+
+```text
++---------------------------------------------------+
+|                   控制平面                          |
+|  +--------------+  +---------------------------+  |
+|  | kube-apiserver |  | etcd                      |  |
+|  +--------------+  +---------------------------+  |
+|  +--------------+  +---------------------------+  |
+|  | kube-scheduler |  | kube-controller-manager   |  |
+|  +--------------+  +---------------------------+  |
++---------------------------------------------------+
+          |                    |
++---------v------+   +---------v------+
+|   工作节点 1    |   |   工作节点 2    |
+|  - kubelet    |   |  - kubelet    |
+|  - kube-proxy |   |  - kube-proxy |
+|  - 容器运行时  |   |  - 容器运行时  |
+|  - Pods       |   |  - Pods       |
++---------------+   +---------------+
+```
+
+用户和组件只与 `kube-apiserver` 交互。所有状态都保存在 `etcd` 中。节点上的组件定期向控制平面汇报状态。
+
+## 控制平面组件
+
+### kube-apiserver
+
+`kube-apiserver` 是集群的唯一入口。所有对集群的操作都通过它的 REST API 完成。
+
+它负责认证、鉴权、准入控制和数据校验。`kubectl`、Controller、Scheduler、kubelet 都是它的客户端。它可以水平扩展,多个实例通过负载均衡对外提供服务。
+
+### etcd
+
+`etcd` 是一个分布式键值数据库。集群的所有状态数据都存放在这里,包括 Pod 定义、ConfigMap、Secret、节点信息等。
+
+它是集群的「唯一事实来源」。一旦 `etcd` 数据丢失,集群状态就无法恢复,所以必须做好备份。
+
+<Warning>
+  生产环境的 etcd 通常部署 3 或 5 个成员,组成 Raft 集群。单节点 etcd 只适合测试环境。
+</Warning>
+
+### kube-scheduler
+
+`kube-scheduler` 负责为新创建的 Pod 选择节点。
+
+调度分两个阶段:过滤和打分。过滤阶段排除不满足条件的节点,例如资源不足或不符合亲和性规则。打分阶段对剩余节点排序,选出最优的一个。
+
+### kube-controller-manager
+
+`kube-controller-manager` 运行集群中的各类 Controller。每个 Controller 负责一种对象的调谐循环。
+
+常见的 Controller 包括:
+
+- Node Controller:监控节点健康状态,处理节点失联。
+- Deployment Controller:管理 Deployment 的副本数和更新。
+- Job Controller:管理 Job 任务的生命周期。
+
+它们共用一个进程运行,但逻辑上互相独立。
+
+### cloud-controller-manager
+
+`cloud-controller-manager` 对接云厂商的 API。它把云平台特定的逻辑从核心代码中剥离出来。
+
+它负责云负载均衡器的创建、节点元数据的同步、云盘挂载等。如果你的集群运行在自建机房,可以不需要这个组件。
+
+<Tip>
+  控制平面组件之间不直接通信。它们各自通过 apiserver 读写状态,这是一个松耦合的设计。
+</Tip>
+
+## 节点组件
+
+### kubelet
+
+kubelet 是运行在每个节点上的代理。它向 apiserver 注册节点,并接收分配到自己节点的 Pod 定义。
+
+它调用容器运行时启动和停止容器,并持续上报 Pod 的运行状态。Pod 的健康检查(liveness 和 readiness 探针)也由 kubelet 执行。
+
+### kube-proxy
+
+`kube-proxy` 负责实现 Service 的网络转发。它在每个节点上维护 iptables 或 IPVS 规则,把发往 Service 虚拟 IP 的流量转发到后端 Pod。
+
+### 容器运行时
+
+容器运行时(Container Runtime)负责真正运行容器。Kubernetes 通过 CRI(Container Runtime Interface)与运行时交互。常见的运行时有 containerd 和 CRI-O。Docker 自 1.24 版本起不再被直接支持。
+
+## 一次 kubectl apply 的协作流程
+
+下面以创建一个 Deployment 为例,看各组件如何配合。
+
+<Steps>
+  <Step title="提交请求">
+    你执行 `kubectl apply -f deployment.yaml`。`kubectl` 把 YAML 转为 JSON,发送给 `kube-apiserver`。
+  </Step>
+  <Step title="认证与持久化">
+    `kube-apiserver` 完成认证、鉴权和校验。通过后,把 Deployment 对象写入 `etcd`。
+  </Step>
+  <Step title="Controller 创建 Pod">
+    Deployment Controller 通过 Watch 机制感知到新对象。它创建 ReplicaSet,ReplicaSet Controller 再创建 3 个未调度的 Pod 记录。
+  </Step>
+  <Step title="调度器分配节点">
+    `kube-scheduler` 发现有未绑定节点的 Pod。经过过滤和打分,为每个 Pod 选定一个节点,并把结果写回 apiserver。
+  </Step>
+  <Step title="kubelet 启动容器">
+    目标节点上的 kubelet 监听到分配给自己的 Pod。它调用容器运行时拉取镜像并启动容器。
+  </Step>
+  <Step title="状态上报">
+    kubelet 把 Pod 的运行状态上报给 apiserver。你执行 `kubectl get pods` 时看到的就是这些状态。
+  </Step>
+</Steps>
+
+<Note>
+  整个流程是异步的。`kubectl apply` 返回成功只表示对象被接受,不代表 Pod 已经运行。需要 `kubectl get` 或 `kubectl rollout status` 确认最终状态。
+</Note>
+
+## 控制平面高可用要点
+
+生产集群的控制平面必须做高可用。核心要点如下。
+
+- **多副本部署**:至少 3 个控制平面节点,分布在不同的故障域。
+- **apiserver 前置负载均衡**:多个 apiserver 实例前挂一个负载均衡器,作为集群的统一入口。
+- **etcd 奇数成员**:部署 3 或 5 个 etcd 成员。奇数成员能用更少的节点容忍同样的故障数。
+- **组件自带选主**:`kube-scheduler` 和 `kube-controller-manager` 支持多副本,通过 leader election 保证同一时刻只有一个实例工作。
+- **定期备份 etcd**:即使做了高可用,也要有定期的快照备份和恢复演练。
+
+<Tip>
+  使用 `kubeadm` 部署集群时,加上 `--control-plane-endpoint` 参数指向负载均衡地址,可以方便地搭建高可用控制平面。搭建练习集群可参考 [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维)。
+</Tip>
+
+## 延伸阅读
+
+- [Kubernetes 基础](/kubernetes/kubernetes-基础):掌握 kubectl 基本操作和核心对象。
+- [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载):了解 Deployment、StatefulSet 等工作负载资源。
+- [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维):动手搭建一个可以实验的集群。

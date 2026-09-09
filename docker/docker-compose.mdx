@@ -1,0 +1,176 @@
+---
+title: "Docker Compose"
+description: "用 Docker Compose 一键编排多容器应用,从服务定义到完整实战"
+---
+
+## Compose 解决什么问题
+
+真实应用很少只有一个容器,一个典型项目可能同时包含 Web 应用、数据库和缓存。不用编排工具时,你需要手动执行多条 `docker run`,还要保证启动顺序、网络和挂载都正确,命令又长又容易出错。Docker Compose 把整套应用定义在一个 `docker-compose.yml` 文件里:一条 `docker compose up -d` 启动所有服务,一条 `docker compose down` 整体拆除。
+
+## 安装
+
+Compose 已经是 Docker 的内置子命令,不再需要单独安装。执行 `docker compose version`,能输出版本号即说明可用。
+
+<Note>
+  旧的独立命令是 `docker-compose`(带连字符)。新版本统一为 `docker compose`(空格分隔)。两者功能基本一致,本文全部使用新写法。
+</Note>
+
+## docker-compose.yml 结构总览
+
+Compose 文件有三个顶层字段:
+
+```yaml
+services:    # 必填,定义各个容器服务
+  web:
+    image: nginx
+
+networks:    # 可选,定义自定义网络
+  frontend:
+
+volumes:     # 可选,定义命名数据卷
+  db-data:
+```
+
+其中 `services` 的每个键是一个服务名;同一网络内的服务可以用服务名互相访问;命名数据卷用于数据持久化。
+
+## 服务定义逐字段讲解
+
+| 字段 | 作用 | 示例 |
+| --- | --- | --- |
+| `image` | 指定使用的镜像 | `image: redis:7` |
+| `build` | 指定构建上下文,替代 `image` | `build: .` |
+| `ports` | 端口映射,宿主机:容器 | `ports: ["8080:80"]` |
+| `volumes` | 挂载数据卷或目录 | `volumes: ["./code:/app"]` |
+| `environment` | 设置环境变量 | `environment: ["TZ=Asia/Shanghai"]` |
+| `env_file` | 从文件批量加载环境变量 | `env_file: .env` |
+| `depends_on` | 声明启动依赖顺序 | `depends_on: ["db"]` |
+| `restart` | 重启策略 | `restart: always` |
+| `healthcheck` | 健康检查配置 | 见下文完整示例 |
+
+`healthcheck` 的子字段示例:
+
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost/health"]
+  interval: 10s     # 每 10 秒检查一次
+  timeout: 3s       # 单次检查超时时间
+  retries: 3        # 连续失败 3 次判定为不健康
+  start_period: 30s # 启动后宽限期
+```
+
+<Tip>
+  `depends_on` 只控制启动顺序,默认不等待依赖服务「就绪」。配合 `condition: service_healthy` 使用,可以等待依赖服务的健康检查通过后再启动。
+</Tip>
+
+## 常用命令表
+
+| 命令 | 作用 |
+| --- | --- |
+| `docker compose up -d` | 创建并后台启动所有服务 |
+| `docker compose down` | 停止并删除所有服务容器和网络 |
+| `docker compose ps` | 查看当前项目的服务状态 |
+| `docker compose logs -f` | 跟踪查看所有服务日志,可指定服务名 |
+| `docker compose exec web sh` | 进入某个服务的容器 |
+| `docker compose build` | 重新构建有 `build` 配置的服务镜像 |
+
+所有命令都在 `docker-compose.yml` 所在目录执行,Compose 以目录名作为项目名。
+
+## 完整示例:Web + Redis + MySQL
+
+下面是一个三服务应用的完整 `docker-compose.yml`:
+
+```yaml
+services:
+  # Web 应用,由本地 Dockerfile 构建
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_HOST=redis
+      - DB_HOST=mysql
+      - DB_PASSWORD=${DB_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_started        # 等 Redis 启动
+      mysql:
+        condition: service_healthy        # 等 MySQL 健康检查通过
+    restart: always
+
+  # 缓存服务
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    restart: always
+
+  # 数据库服务
+  mysql:
+    image: mysql:8
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
+      - MYSQL_DATABASE=appdb
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: always
+
+volumes:
+  redis-data:
+  mysql-data:
+```
+
+## .env 环境变量文件
+
+Compose 会自动读取同目录下的 `.env` 文件,用于替换 YAML 中的变量占位符(见上方完整示例)。注意把 `.env` 加入 `.gitignore`,不要把密码提交进版本库。
+
+```bash
+# .env 文件内容
+DB_PASSWORD=s3cret-passw0rd
+```
+
+<Warning>
+  `.env` 文件只做变量替换,不会自动注入容器。要让容器内读到环境变量,仍需在 `environment` 或 `env_file` 中显式声明。
+</Warning>
+
+## 常用工作流
+
+### 开发环境热挂载
+
+把本地代码目录挂载进容器,改代码即时生效:
+
+```yaml
+services:
+  web:
+    build: .
+    volumes:
+      - ./src:/app/src    # 本地代码覆盖容器内目录
+    ports:
+      - "8080:8080"
+```
+
+### 重建镜像
+
+代码或依赖变化后,先重建再启动。也可以加 `--build` 合并成一步:
+
+```bash
+docker compose build        # 重新构建镜像
+docker compose up -d        # 用新镜像重建容器
+# 等效于一步:docker compose up -d --build
+```
+
+<Tip>
+  排查问题时用 `docker compose logs -f web` 盯单个服务的日志,比看全部服务的混合输出更清晰。
+</Tip>
+
+## 延伸阅读
+
+- [Docker 基础](/docker/docker-基础):单容器的基本操作
+- [Docker 网络](/docker/docker-网络):理解 Compose 自动创建的网络
+- [Docker 存储](/docker/docker-存储):数据卷的更多用法
+- [Kubernetes 基础](/kubernetes/kubernetes-基础):从 Compose 走向集群编排

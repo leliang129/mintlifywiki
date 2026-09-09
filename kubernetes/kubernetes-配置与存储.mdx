@@ -1,0 +1,179 @@
+---
+title: "Kubernetes 配置与存储"
+description: "学习 ConfigMap、Secret、Volume 与 PV/PVC/StorageClass 持久化存储体系"
+---
+
+## ConfigMap
+
+ConfigMap 以键值对保存非机密配置,让配置与镜像分离。三种创建方式:
+
+```bash
+kubectl create configmap app-config --from-literal=LOG_LEVEL=debug  # 字面量创建
+kubectl create configmap nginx-conf --from-file=nginx.conf        # 从文件创建
+```
+
+也可以用 YAML 声明式创建:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  LOG_LEVEL: "debug"        # 普通键值
+  app.yaml: |               # 多行文件内容
+    port: 8080
+```
+
+### 注入为环境变量
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+spec:
+  containers:
+    - name: web
+      image: nginx:1.25
+      envFrom:
+        - configMapRef:
+            name: app-config   # 所有键一次性注入
+```
+
+### 挂载为文件
+
+```yaml
+spec:
+  containers:
+    - name: web
+      image: nginx:1.25
+      volumeMounts:
+        - name: config
+          mountPath: /etc/config   # 每个键变成一个文件
+  volumes:
+    - name: config
+      configMap:
+        name: app-config
+```
+
+<Note>
+  挂载方式下更新 ConfigMap,文件会自动更新。env 注入则需重启 Pod 才生效。
+</Note>
+
+## Secret
+
+Secret 保存密码、Token、证书等敏感数据,结构与 ConfigMap 类似,数据以 base64 编码存储。
+
+```bash
+echo -n 'admin' | base64    # 编码:YWRtaW4=
+```
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-secret
+type: Opaque          # 通用类型
+data:
+  username: YWRtaW4=  # base64 编码后的值
+  password: cGFzc3dvcmQ=
+```
+
+| 类型 | 用途 |
+| ---- | ---- |
+| `Opaque` | 默认,任意键值对 |
+| `kubernetes.io/tls` | TLS 证书,键固定为 `tls.crt` 和 `tls.key` |
+| `kubernetes.io/dockerconfigjson` | 拉取私有镜像仓库的凭据 |
+
+与 ConfigMap 的区别:Secret 用于敏感数据,支持类型校验;ConfigMap 用于普通配置。
+
+<Warning>
+  base64 只是编码不是加密。生产环境应开启 encryption at rest,让 Secret 在 etcd 中加密存储。
+</Warning>
+
+## Volume 常见类型
+
+Volume 生命周期与 Pod 一致。常见类型:
+
+| 类型 | 特点 | 典型场景 |
+| ---- | ---- | ---- |
+| `emptyDir` | Pod 创建时生成,删除即清空 | 容器间共享临时数据 |
+| `hostPath` | 挂载节点本地目录 | 日志采集、访问节点文件 |
+| `projected` | 多个来源映射到同一目录 | 组合 Secret 与 ConfigMap |
+| `downwardAPI` | 暴露 Pod 自身信息为文件 | 读取 Pod 名称、标签 |
+
+## 持久化存储体系
+
+普通 Volume 随 Pod 消亡。持久化数据需要三层对象协作:
+
+- **PV(PersistentVolume)**:集群里的一块存储。
+- **PVC(PersistentVolumeClaim)**:用户对存储的申请,说明大小和访问模式。
+- **StorageClass**:存储的"模板",定义用哪个 provisioner 动态创建 PV。
+
+关系:Pod 引用 PVC,PVC 绑定 PV,StorageClass 自动供给 PV。动态供给流程:
+
+1. 管理员创建 StorageClass,指定 provisioner。
+2. 用户提交 PVC,写明 `storageClassName` 和容量。
+3. provisioner 自动创建 PV 并与 PVC 绑定。
+
+访问模式:
+
+| 模式 | 含义 |
+| ---- | ---- |
+| `ReadWriteOnce`(RWO) | 可被单个节点读写挂载 |
+| `ReadOnlyMany`(ROX) | 可被多个节点只读挂载 |
+| `ReadWriteMany`(RWX) | 可被多个节点读写挂载 |
+
+### 完整示例:PVC + Deployment
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-pvc
+spec:
+  storageClassName: standard   # 触发动态供给
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25
+          volumeMounts:
+            - name: data
+              mountPath: /data   # 数据写入此处即持久化
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-pvc
+```
+
+```bash
+kubectl apply -f pvc-deploy.yaml
+kubectl get pvc data-pvc   # STATUS 显示 Bound 即绑定成功
+```
+
+<Tip>
+  删除 PVC 前确认 `reclaimPolicy`。`Delete` 会连同底层数据一起删除,`Retain` 则保留。
+</Tip>
+
+## 延伸阅读
+
+- [Kubernetes 基础](/kubernetes/kubernetes-基础)与 [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载)

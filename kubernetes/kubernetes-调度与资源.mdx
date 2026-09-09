@@ -1,0 +1,173 @@
+---
+title: "Kubernetes 调度与资源"
+description: "理解调度流程、requests/limits、QoS、亲和性、污点容忍与自动扩缩"
+---
+
+调度决定 Pod 落在哪个节点,资源配置决定 Pod 能用多少。本文讲解调度器、资源管理、QoS 和自动扩缩。
+
+## kube-scheduler 调度流程
+
+创建 Pod 后,kube-scheduler 分两步选出节点:
+
+<Steps>
+  <Step title="过滤">
+    排除不满足硬性条件的节点,例如资源不足、端口冲突、节点标签不匹配。
+  </Step>
+  <Step title="打分">
+    对剩余节点按策略打分,例如资源均衡程度、镜像是否已存在,选得分最高的节点。
+  </Step>
+</Steps>
+
+打分结果是建议,不是绝对。高优先级 Pod 还可能抢占低优先级 Pod 的资源。
+
+## 资源请求与限制
+
+`requests` 是调度依据,`limits` 是运行上限:
+
+```yaml
+resources:
+  requests:
+    cpu: "250m"      # 调度时保证分配到 0.25 核
+    memory: "256Mi"  # 保证 256Mi 内存
+  limits:
+    cpu: "500m"      # 最多用 0.5 核
+    memory: "512Mi"  # 最多用 512Mi 内存
+```
+
+两种资源超限时行为不同:
+
+- **CPU**:可压缩资源。超限只会被限流,容器变慢但不会死。
+- **内存**:不可压缩资源。超限会触发 OOM,容器被直接杀掉重启。
+
+<Warning>
+  不设 limits 的容器可能耗尽节点内存,连累其他 Pod。生产环境务必配置 requests 和 limits。
+</Warning>
+
+## QoS 三个等级
+
+Kubernetes 根据 requests 和 limits 的配置,把 Pod 分为三级:
+
+| 等级 | 条件 | 节点资源紧张时 |
+| ---- | ---- | ---- |
+| `Guaranteed` | 所有容器 requests 等于 limits | 最后被杀 |
+| `Burstable` | 至少一个容器设了 requests | 其次被杀 |
+| `BestEffort` | 什么都没设 | 最先被杀 |
+
+```bash
+kubectl get pod web -o jsonpath='{.status.qosClass}'
+```
+
+## 亲和性调度
+
+### nodeAffinity:选择节点
+
+```yaml
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: disktype
+              operator: In
+              values:
+                - ssd        # 只调度到 disktype=ssd 的节点
+```
+
+`required` 是硬条件,`preferred` 是软倾向,尽量满足但不强制。
+
+### podAffinity 与 podAntiAffinity:选择邻居
+
+```yaml
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: kubernetes.io/hostname   # 按节点维度分散
+        labelSelector:
+          matchLabels:
+            app: web        # 不和同为 web 的 Pod 同节点
+```
+
+podAntiAffinity 常用于把同一应用的副本分散到不同节点,避免单点故障。
+
+## 污点与容忍
+
+污点是节点的"拒绝标志",Pod 必须有对应容忍才能调度上去。常用于专用节点。
+
+```bash
+# 给节点打污点,标记为 GPU 专用
+kubectl taint nodes gpu-node dedicated=gpu:NoSchedule
+```
+
+```yaml
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "gpu"
+    effect: "NoSchedule"     # 容忍该污点,可以调度到 GPU 节点
+```
+
+## 拓扑分布约束
+
+`topologySpreadConstraints` 让副本在节点、可用区之间均匀分布:
+
+```yaml
+topologySpreadConstraints:
+  - maxSkew: 1                        # 各区域 Pod 数量最多差 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule  # 不满足就暂不调度
+    labelSelector:
+      matchLabels:
+        app: web
+```
+
+## HPA 自动扩缩
+
+HPA 根据指标自动调整副本数。先确保集群装了 metrics-server。
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60   # CPU 利用率超 60% 就扩容
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70   # 内存利用率超 70% 也扩容
+```
+
+```bash
+kubectl get hpa web-hpa --watch   # 观察副本数变化
+```
+
+<Tip>
+  HPA 依赖 requests 计算利用率,没设 requests 的 Pod 无法基于 CPU 百分比扩缩容。
+</Tip>
+
+## VPA 与 Cluster Autoscaler
+
+- **VPA**:纵向扩缩,自动调整 Pod 的 requests 和 limits 数值。
+- **Cluster Autoscaler**:调整集群本身,节点不够时加节点,空闲时减节点。
+
+三者配合:HPA 调副本数,VPA 调单 Pod 资源,Cluster Autoscaler 调节点数量。
+
+## 延伸阅读
+
+- [Kubernetes 基础](/kubernetes/kubernetes-基础)
+- [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载)
+- [Kubernetes 配置与存储](/kubernetes/kubernetes-配置与存储)
