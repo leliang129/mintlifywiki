@@ -1,0 +1,48 @@
+---
+title: "Jenkins 概述"
+description: "老牌 CI 工具:声明式 Pipeline 与插件生态"
+---
+
+Jenkins 是应用最广的自托管 CI 工具,插件生态极其丰富。本小节整理它的核心概念、与 GitLab CI 的对比和适用场景。
+
+## 核心概念速览
+
+| 概念 | 说明 |
+| ---- | ---- |
+| Jenkinsfile | 流水线定义文件,分声明式和脚本式两种语法 |
+| Agent / Node | 执行构建的节点,支持静态节点与 K8s 动态 Pod |
+| 插件 | 功能几乎全部来自插件(1800+),是优势也是负担 |
+| Shared Library | 团队级流水线复用机制 |
+
+## 最小声明式 Pipeline
+
+```groovy
+pipeline {
+  agent any
+  stages {
+    stage('Build') {
+      steps { sh 'docker build -t app:latest .' }
+    }
+    stage('Test') {
+      steps { sh 'docker run --rm app:latest npm test' }
+    }
+  }
+  post {
+    failure { echo '构建失败,通知值班群' }
+  }
+}
+```
+
+## 与 GitLab CI 怎么选
+
+| 维度 | GitLab CI | Jenkins |
+| ---- | ---- | ---- |
+| 配置方式 | YAML,简单直观 | Groovy,灵活但门槛高 |
+| 托管 | 随 GitLab 自带 | 需要自己运维服务 |
+| 生态 | 够用 | 插件极多,老系统集成强 |
+| 适用 | 新项目、云原生栈 | 存量系统、复杂定制 |
+
+## 延伸阅读
+
+- [CI/CD & GitOps 概述](/cicd/overview)
+- [GitLab CI 概述](/cicd/gitlab/overview):YAML 派的替代方案

@@ -1,34 +1,31 @@
 ---
 title: "自动化运维概述"
-description: "CI/CD、GitOps 与运维自动化的整体版图"
+description: "Ansible、Terraform、Python:运维自动化三件套"
 ---
 
-自动化运维的目标:把重复的部署、发布、巡检工作交给流水线与声明式工具,人只做决策。本栏目整理从代码提交到生产发布的自动化实践。
+自动化运维的目标:把重复的部署、配置、巡检工作交给工具,人只做决策。本栏目按分工整理三类核心工具。
 
-## 自动化版图
+## 工具分工
 
 | 领域 | 代表组件 | 解决什么 |
 | ---- | ---- | ---- |
-| CI/CD 流水线 | GitLab CI、GitHub Actions | 提交即构建、测试、产出镜像 |
-| GitOps 发布 | Argo CD | 以 Git 仓库为唯一事实来源,自动同步到集群 |
-| 渐进式交付 | Argo Rollouts | 金丝雀、蓝绿发布,自动分析与回滚 |
-| 配置管理 | Ansible | 批量主机配置与变更 |
-| 巡检与 SOP | 脚本 + 定时任务 | 日常巡检、备份、清理的自动化 |
+| 基础设施即代码 | Terraform | 声明式创建云资源:主机、网络、K8s 集群 |
+| 配置管理 | Ansible | 无 Agent 批量配置:装软件、改参数、管服务 |
+| 巡检与 SOP | Python 脚本 | 定制工具:巡检报告、API 编排、定时任务 |
 
-## 推荐的演进路径
+三者的典型协作顺序:**Terraform 把资源建出来 → Ansible 把系统配好 → Python 补上定制化工具**。发布流水线的内容归 [CI/CD & GitOps](/cicd/overview) 栏目。
+
+## 推荐阅读顺序
 
 <Steps>
-  <Step title="先手工跑通">
-    用 kubectl 或 Compose 手工完成一次完整部署,理解每个环节,见 [Kubernetes 系列](/kubernetes/kubernetes-基础)。
+  <Step title="Ansible">
+    先学[ Ansible 概述](/automation/ansible/overview):批量配置管理是日常运维最高频的自动化需求。
   </Step>
-  <Step title="流水线固化">
-    用 CI 把构建、测试、镜像推送固化成流水线,做到"构建即打 tag,产物不可变"。
+  <Step title="Terraform">
+    再学[ Terraform 概述](/automation/terraform/overview):把基础设施也纳入代码管理,环境可复制。
   </Step>
-  <Step title="GitOps 发布">
-    用 Argo CD 接管部署:合并代码即发布,集群状态自动向仓库期望状态收敛。
-  </Step>
-  <Step title="渐进式交付">
-    引入 Argo Rollouts 做金丝雀发布,配合指标自动分析,出问题自动回滚。
+  <Step title="Python">
+    最后用[ Python 概述](/automation/python/overview)补齐定制能力:巡检、报告、内部小工具。
   </Step>
 </Steps>
 

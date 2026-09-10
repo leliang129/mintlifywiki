@@ -1,0 +1,49 @@
+---
+title: "Argo Rollouts 概述"
+description: "金丝雀与蓝绿发布:渐进式交付控制器"
+---
+
+Argo Rollouts 是 Kubernetes 的渐进式交付控制器,用 Rollout 资源替代 Deployment,提供金丝雀、蓝绿等高级发布策略。本小节整理它的核心概念与落地要点。
+
+## 核心概念速览
+
+| 概念 | 说明 |
+| ---- | ---- |
+| Rollout | 替代 Deployment 的 CRD,多了发布策略字段 |
+| 金丝雀 Canary | 先放少量流量到新版本,验证通过后逐步放量 |
+| 蓝绿 BlueGreen | 新旧版本并存,验证通过后一次性切换 |
+| AnalysisTemplate | 发布过程中自动查询指标,决定继续还是回滚 |
+
+## 一个最小金丝雀配置
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: my-app
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: my-app
+  strategy:
+    canary:
+      steps:
+        - setWeight: 10    # 先切 10% 流量
+        - pause: { duration: 5m }
+        - setWeight: 50
+        - pause: { duration: 5m }
+  template:
+    # ... 与 Deployment 的 Pod 模板相同
+```
+
+## 落地要点
+
+- **指标驱动**:接上 Prometheus,错误率超标自动回滚,见 [Monitoring 概述](/observability/monitoring/overview)
+- **与 Argo CD 配合**:Rollout 资源照常进 Git 仓库,由 [Argo CD](/cicd/argocd/overview) 同步
+- **流量精细切分**:配合 Ingress 或 Service Mesh 按权重分流
+
+## 延伸阅读
+
+- [CI/CD & GitOps 概述](/cicd/overview)
+- [Kubernetes 工作负载](/kubernetes/kubernetes-工作负载):Deployment 的滚动更新是基础款

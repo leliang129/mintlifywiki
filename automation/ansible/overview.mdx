@@ -1,0 +1,32 @@
+---
+title: "Ansible 概述"
+description: "无 Agent 的配置管理与批量运维工具"
+---
+
+Ansible 通过 SSH 批量管理主机,不需要在被管节点装任何 Agent。本小节整理它的核心概念、使用场景与落地要点。
+
+## 核心概念速览
+
+| 概念 | 说明 |
+| ---- | ---- |
+| Inventory | 主机清单,定义管理哪些机器、如何分组 |
+| Playbook | YAML 编排文件,描述要在主机上执行的任务序列 |
+| Module | 最小执行单元(如 `copy`、`yum`、`service`),内置上千个 |
+| Role | 组织 Playbook 的规范目录结构,便于复用 |
+
+## 典型使用场景
+
+- **批量配置**:一百台机器统一改内核参数、装 Agent,一条命令完成
+- **应用部署**:把发布流程编排成 Playbook,替代手工登录操作
+- **巡检采集**:批量收集主机状态,配合 [Python](/automation/python/overview) 做报告
+
+## 落地要点
+
+- **幂等性**:任务重复执行结果一致,这是 Playbook 设计的第一原则
+- **与 Terraform 分工**:Terraform 负责"把资源建出来",Ansible 负责"把系统配好",见 [Terraform 概述](/automation/terraform/overview)
+- **凭据管理**:敏感变量用 Ansible Vault 加密,不要明文进仓库
+
+## 延伸阅读
+
+- [自动化运维概述](/automation/overview)
+- [Kubernetes 集群运维](/kubernetes/kubernetes-集群运维):集群节点的批量维护

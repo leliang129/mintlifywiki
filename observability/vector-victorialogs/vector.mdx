@@ -1,0 +1,229 @@
+---
+title: "Vector 部署"
+description: "在 Kubernetes 中以 DaemonSet 部署 Vector 日志采集器"
+---
+
+Vector 在每个 Kubernetes 节点运行一个 Pod。它读取节点上的容器日志,补充 Kubernetes 元数据,完成字段映射后写入 VictoriaLogs。
+
+## 环境前提
+
+- 已配置 `kubeconfig`,可以执行 `kubectl`
+- 已完成 [VictoriaLogs 部署](/observability/vector-victorialogs/victorialogs)
+- 集群内可以访问 `victorialogs.observability.svc.cluster.local:9428`
+- 各节点可以拉取 Vector 镜像
+
+## 采集链路
+
+```text
+/var/log/pods 和 /var/log/containers
+  → kubernetes_logs source
+  → enrich_logs remap transform
+  → VictoriaLogs /insert/jsonline
+```
+
+Vector 将标准字段映射为 VictoriaLogs 约定字段:
+
+| Vector 字段 | VictoriaLogs 字段 | 用途 |
+| ----------- | ----------------- | ---- |
+| `message` | `_msg` | 日志正文 |
+| `timestamp` | `_time` | 日志时间 |
+
+清单还会增加 `cluster: kubernetes` 和 `collector: vector` 两个固定字段。Pod、Namespace、Container 等 Kubernetes 元数据会保留。
+
+## 部署清单
+
+把以下内容保存为 `vector.yaml`:
+
+```yaml vector.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    app.kubernetes.io/part-of: observability
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vector
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vector-observability
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vector-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vector-observability
+subjects:
+  - kind: ServiceAccount
+    name: vector
+    namespace: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: observability
+data:
+  vector.yaml: |
+    data_dir: /var/lib/vector
+    sources:
+      kubernetes_logs:
+        type: kubernetes_logs
+        self_node_name: ${VECTOR_SELF_NODE_NAME}
+    transforms:
+      enrich_logs:
+        type: remap
+        inputs:
+          - kubernetes_logs
+        source: |
+          ._msg = .message
+          ._time = .timestamp
+          .cluster = "kubernetes"
+          .collector = "vector"
+    sinks:
+      victorialogs:
+        type: http
+        inputs:
+          - enrich_logs
+        uri: http://victorialogs.observability.svc.cluster.local:9428/insert/jsonline
+        method: post
+        encoding:
+          codec: json
+        framing:
+          method: newline_delimited
+        headers:
+          Content-Type: application/stream+json
+        compression: gzip
+        batch:
+          max_events: 500
+          timeout_secs: 2
+        request:
+          retry_attempts: 10
+          retry_initial_backoff_secs: 1
+          retry_max_duration_secs: 30
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: vector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vector
+    spec:
+      serviceAccountName: vector
+      terminationGracePeriodSeconds: 30
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: vector
+          image: uhub.service.ucloud.cn/kubernetes_images/vector:0.47.0-alpine
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config
+            - /etc/vector/vector.yaml
+          env:
+            - name: VECTOR_SELF_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: vector-config
+              mountPath: /etc/vector
+              readOnly: true
+            - name: var-log
+              mountPath: /var/log
+              readOnly: true
+            - name: vector-data
+              mountPath: /var/lib/vector
+      volumes:
+        - name: vector-config
+          configMap:
+            name: vector-config
+        - name: var-log
+          hostPath:
+            path: /var/log
+        - name: vector-data
+          hostPath:
+            path: /var/lib/observability/vector
+            type: DirectoryOrCreate
+```
+
+<Note>
+  Vector 需要读取节点日志文件,因此容器以 UID `0` 运行并挂载节点 `/var/log`。请结合集群的 Pod Security 和准入策略评估权限。
+</Note>
+
+## 应用并验证
+
+```bash
+kubectl apply -f vector.yaml
+kubectl -n observability rollout status daemonset/vector --timeout=180s
+kubectl -n observability get pods -l app.kubernetes.io/name=vector -o wide
+```
+
+每个可调度节点应有一个 Vector Pod。查看采集器日志:
+
+```bash
+kubectl -n observability logs daemonset/vector --tail=100
+```
+
+确认 Vector 能解析配置并连接 VictoriaLogs。然后在 VictoriaLogs 中查询 Vector 采集的日志:
+
+```bash
+curl --get 'http://<节点IP>:30942/select/logsql/query' \
+  --data-urlencode 'query=collector:vector'
+```
+
+## 常见故障
+
+| 现象 | 排查方法 |
+| ---- | -------- |
+| 部分节点没有 Vector Pod | 检查节点污点、调度事件和 DaemonSet 状态 |
+| 没有采集到容器日志 | 确认节点 `/var/log` 已挂载,并检查容器运行时日志路径 |
+| 出现连接重试 | 检查 VictoriaLogs Service、Endpoints 和 `/health` 接口 |
+| Grafana 显示 `missing _msg field` | 确认 remap 中存在 `._msg = .message` |
+
+## 删除组件
+
+```bash
+kubectl -n observability delete daemonset vector
+kubectl -n observability delete configmap vector-config
+kubectl delete clusterrolebinding vector-observability
+kubectl delete clusterrole vector-observability
+kubectl -n observability delete serviceaccount vector
+```
+
+节点上的 `/var/lib/observability/vector` 会保留。确认不再需要 Vector 检查点后再清理该目录。
+
+## 下一步
+
+- [部署 VictoriaLogs](/observability/vector-victorialogs/victorialogs):检查日志存储与查询接口
+- [部署 Grafana](/observability/vector-victorialogs/grafana):查询和展示采集到的日志

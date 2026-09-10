@@ -1,0 +1,38 @@
+---
+title: "Python 概述"
+description: "运维脚本与自动化工具的开发语言"
+---
+
+Python 是运维自动化的万能胶水:调 API、处理数据、写巡检工具都能快速上手。本小节整理它在运维场景的典型用法与生态。
+
+## 典型使用场景
+
+| 场景 | 常用库 | 说明 |
+| ---- | ---- | ---- |
+| 调云平台 API | `requests`、`boto3` | 查询资源、批量操作、自动开停机 |
+| SSH 批量操作 | `paramiko`、`fabric` | 不适合上 Ansible 时的轻量替代 |
+| 巡检与报告 | `pandas`、`jinja2` | 采集数据后生成 HTML / Excel 报告 |
+| 定时任务 | `schedule`、crontab | 周期执行的自动化脚本 |
+
+## 一个最小例子
+
+```python
+import requests
+
+# 调用内部 API 查询即将过期的证书,提前告警
+resp = requests.get("https://api.example.com/certs", timeout=10)
+for cert in resp.json():
+    if cert["days_left"] < 30:
+        print(f"即将过期: {cert['domain']} 剩 {cert['days_left']} 天")
+```
+
+## 落地要点
+
+- **与 Ansible 分工**:流程编排用 [Ansible](/automation/ansible/overview),逻辑复杂的定制工具用 Python
+- **依赖隔离**:每个工具用 `venv` 或 `uv` 单独建虚拟环境,不污染系统 Python
+- **可复用**:常用功能封装成 CLI(如用 `typer`),团队共用
+
+## 延伸阅读
+
+- [自动化运维概述](/automation/overview)
+- [Kubernetes 故障排查](/kubernetes/kubernetes-故障排查):巡检脚本可以自动化的排查项

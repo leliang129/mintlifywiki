@@ -1,0 +1,218 @@
+---
+title: "Vector + VictoriaLogs 概述"
+description: "轻量日志栈的架构原理:Vector 管采集,VictoriaLogs 管存储,Grafana 管展示"
+---
+
+Vector + VictoriaLogs + Grafana 是一套轻量、高性能的日志采集、存储与查询方案。三者各司其职:
+
+```text
+应用 / 容器日志
+       │
+       ▼
+    Vector        日志采集 / 处理
+       │
+       ▼
+ VictoriaLogs     日志存储 / 查询
+       │
+       ▼
+    Grafana       查询 / 可视化
+```
+
+最简单的记忆方式:**Vector 管采集,VictoriaLogs 管存储,Grafana 管展示。**
+
+## 为什么用这套架构
+
+传统日志系统通常是 `Filebeat / Fluent Bit → Elasticsearch → Kibana`。Elasticsearch 功能强大,但对单纯的日志存储查询场景来说资源消耗较高,集群运维也复杂。
+
+VictoriaLogs 是 VictoriaMetrics 生态中的日志存储系统,定位高性能、低资源消耗。用它替换 Elasticsearch,就能以更低的成本搭出一套够用的云原生日志平台。
+
+## Vector:采集与加工
+
+Vector 是高性能的日志和指标数据采集、处理与转发工具(Rust 编写)。核心流水线是三段式:
+
+```text
+Source(获取数据)→ Transform(处理数据)→ Sink(发送数据)
+```
+
+| 环节 | 职责 | 例子 |
+| ---- | ---- | ---- |
+| Source | 从数据源获取日志 | 文件、Docker、Kubernetes、Syslog、HTTP、Kafka |
+| Transform | 加工处理 | 解析 JSON、过滤、改字段、加字段、格式转换 |
+| Sink | 发送到目的地 | VictoriaLogs、Kafka、S3、Elasticsearch、Loki |
+
+在 Kubernetes 场景下,Vector 以 DaemonSet 运行,每个节点一个实例:
+
+```text
+                 Kubernetes Cluster
+┌──────────────────────────────────────────┐
+│  Node 1                Node 2            │
+│  ┌────────────┐       ┌────────────┐     │
+│  │  App Pod   │       │  App Pod   │     │
+│  └─────┬──────┘       └─────┬──────┘     │
+│        ▼                    ▼            │
+│      Vector               Vector         │
+│    (DaemonSet)          (DaemonSet)      │
+└────────┼────────────────────┼────────────┘
+         └──────────┬─────────┘
+                    ▼
+              VictoriaLogs
+```
+
+<Note>
+  Vector 是 Agent,不是存储。它只负责"采集 → 处理 → 转发",不要把它当 Elasticsearch 或 VictoriaLogs 用。
+</Note>
+
+## VictoriaLogs:存储与查询
+
+VictoriaLogs 负责日志的接收、存储、索引和查询,是整个平台的后端存储。主要特点:
+
+- 面向日志场景设计,高性能摄取
+- 资源消耗低,支持大规模存储
+- 原生支持结构化日志
+- 与 Grafana、VictoriaMetrics 生态集成友好
+
+适合 Kubernetes 日志、应用日志、系统日志、容器日志等场景。
+
+## Grafana:查询与展示
+
+Grafana 是统一的可观测性数据查询与可视化平台。它不负责采集和存储,只负责查询和展示:关键字搜索、时间范围过滤、字段过滤、查看日志上下文、创建日志面板。
+
+更重要的是,它能把 Metrics、Logs、Traces 三类数据放到同一个界面分析。
+
+<Note>
+  Grafana 不是日志数据库。真正保存日志的是 VictoriaLogs,Grafana 只是查询入口。
+</Note>
+
+## 完整数据链路
+
+```text
+        日志产生(Docker / Kubernetes)
+                    │
+                    ▼
+                 Vector
+              Source / Transform / Sink
+                    │
+                    ▼
+              VictoriaLogs(日志存储)
+                    │
+                    ▼
+               Grafana(查询 / 分析 / 展示)
+                    │
+                    ▼
+                  运维人员
+```
+
+## 一条日志的旅程
+
+以 Kubernetes 应用日志为例:
+
+<Steps>
+  <Step title="应用产生日志">
+    应用把日志写到 stdout / stderr。
+  </Step>
+  <Step title="容器运行时落盘">
+    Container Runtime 把日志保存为节点本地日志文件。
+  </Step>
+  <Step title="Vector 采集与解析">
+    Vector 读取日志并解析成结构化数据。例如原始日志 `2026-09-10 16:20:30 INFO request success` 会被转成:
+
+    ```json
+    {
+      "timestamp": "2026-09-10T16:20:30",
+      "level": "INFO",
+      "message": "request success"
+    }
+    ```
+  </Step>
+  <Step title="附加 Kubernetes 元数据">
+    日志自动携带 `namespace`、`pod`、`container`、`node`、`app` 等字段,例如 `namespace=production pod=order-service-xxx level=INFO`。
+  </Step>
+  <Step title="写入 VictoriaLogs">
+    Vector 通过 HTTP 接口批量发送到 VictoriaLogs。
+  </Step>
+  <Step title="Grafana 查询">
+    运维在 Grafana 里按 namespace / pod / 时间范围检索日志。
+  </Step>
+</Steps>
+
+## 与指标体系的联动
+
+如果已用 VictoriaMetrics 或 Prometheus 做指标监控,可以用 Grafana 把三大支柱统一起来:
+
+```text
+                    Grafana
+          ┌─────────┼─────────┐
+          ▼         ▼         ▼
+      Metrics     Logs     Traces
+     (Prometheus) (VictoriaLogs) (Tempo)
+```
+
+典型联动排障路径:
+
+```text
+Prometheus 发现 Pod CPU 持续 90%
+  → Grafana 定位异常时间点
+  → VictoriaLogs 查询该 Pod 日志
+  → 发现大量 ERROR
+  → 定位应用问题
+```
+
+## 注意事项
+
+| 事项 | 说明 |
+| ---- | ---- |
+| Vector 不是存储 | 它只是 Agent,采集、处理、转发 |
+| Grafana 不是数据库 | 它只做查询展示,日志存在 VictoriaLogs |
+| 保留策略先行 | 先算清每天日志量 × 保留天数,例如每天 500GB 留 30 天约需 15TB 原始空间,还要预留压缩、索引、冗余的余量 |
+| 标签克制 | 元数据保持 `namespace` / `pod` / `container` / `app` / `node` / `level` 这类低基数字段,高基数字段不要随便做索引维度 |
+
+## 与 ELK 的对比
+
+| 项目 | Vector + VictoriaLogs + Grafana | ELK |
+| ---- | ---- | ---- |
+| 日志采集 | Vector | Filebeat / Logstash |
+| 日志存储 | VictoriaLogs | Elasticsearch |
+| 日志展示 | Grafana | Kibana |
+| 资源消耗 | 相对较低 | 相对较高 |
+| 架构复杂度 | 相对简单 | 相对复杂 |
+| 查询能力 | 强 | 很强 |
+| Grafana 生态 | 原生友好 | 可集成 |
+| VictoriaMetrics 生态 | 友好 | 无直接关系 |
+
+<Warning>
+  这不是说 VictoriaLogs 能全面替代 Elasticsearch。Elasticsearch 的全文检索、复杂查询和数据分析能力仍然很强。选型应根据日志规模、查询需求、团队技术栈和运维成本决定。
+</Warning>
+
+## 总结
+
+```text
+┌──────────────┐
+│ Application  │
+│ Docker / K8s │
+└──────┬───────┘
+       │ Logs
+       ▼
+┌──────────────┐
+│    Vector    │  采集 / 解析 / 过滤 / 转发
+└──────┬───────┘
+       │ Logs
+       ▼
+┌──────────────┐
+│ VictoriaLogs │  日志存储 / 查询
+└──────┬───────┘
+       │ Query
+       ▼
+┌──────────────┐
+│   Grafana    │  查询 / 分析 / 展示
+└──────────────┘
+```
+
+这套架构的核心价值:以相对轻量的方式构建云原生日志系统,并能与 Prometheus / VictoriaMetrics 监控体系结合,形成统一的可观测性平台。
+
+## 延伸阅读
+
+- [Vector 部署](/observability/vector-victorialogs/vector):DaemonSet 采集器落地
+- [VictoriaLogs 部署](/observability/vector-victorialogs/victorialogs):日志存储与查询服务
+- [Grafana 部署](/observability/vector-victorialogs/grafana):预置数据源的展示层
+- [ELK 概述](/observability/elk/overview):另一条日志技术路线
+- [可观测性概述](/observability/overview):三大支柱全景

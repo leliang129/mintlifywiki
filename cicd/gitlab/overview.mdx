@@ -1,0 +1,44 @@
+---
+title: "GitLab CI 概述"
+description: "以 .gitlab-ci.yml 为核心的流水线即代码"
+---
+
+GitLab CI 是 GitLab 内置的流水线功能:提交代码时自动执行构建、测试、打包。本小节整理它的核心概念与落地要点。
+
+## 核心概念速览
+
+| 概念 | 说明 |
+| ---- | ---- |
+| `.gitlab-ci.yml` | 仓库根目录的流水线定义文件,随代码版本化 |
+| Stage / Job | 流水线按阶段串行,阶段内任务并行 |
+| Runner | 实际执行 Job 的工人,支持 Docker / Shell / K8s 执行器 |
+| 产物 Artifacts | Job 之间传递文件(如构建产物、测试报告) |
+
+## 一个最小流水线
+
+```yaml
+stages: [build, test, deploy]
+
+build-image:
+  stage: build
+  script:
+    - docker build -t registry.example.com/app:$CI_COMMIT_SHORT_SHA .
+    - docker push registry.example.com/app:$CI_COMMIT_SHORT_SHA
+
+deploy:
+  stage: deploy
+  script:
+    - echo "更新 GitOps 仓库里的镜像 tag,由 Argo CD 接管发布"
+  only: [main]
+```
+
+## 落地要点
+
+- **构建即打 tag**:镜像用 commit SHA 标记,不在环境间重复构建
+- **CI 与 GitOps 分工**:CI 只到"产出镜像"为止,部署交给 [Argo CD](/cicd/argocd/overview)
+- **凭据**:镜像仓库密码放 CI/CD Variables,不要写进 yml
+
+## 延伸阅读
+
+- [CI/CD & GitOps 概述](/cicd/overview)
+- [Docker 生产实践](/docker/docker-生产实践):流水线里的镜像规范

@@ -1,0 +1,43 @@
+---
+title: "CI/CD & GitOps 概述"
+description: "从代码提交到生产发布的自动化流水线与声明式交付"
+---
+
+CI/CD 与 GitOps 解决同一个问题:让「代码合并」到「生产发布」这段路全自动、可追溯、可回滚。
+
+## 核心组成
+
+| 领域 | 代表组件 | 解决什么 |
+| ---- | ---- | ---- |
+| CI/CD 流水线 | GitLab CI、GitHub Actions | 提交即构建、测试、产出镜像 |
+| GitOps 发布 | Argo CD | 以 Git 仓库为唯一事实来源,自动同步到集群 |
+| 渐进式交付 | Argo Rollouts | 金丝雀、蓝绿发布,自动分析与回滚 |
+
+## 推荐的演进路径
+
+<Steps>
+  <Step title="先手工跑通">
+    用 kubectl 或 Compose 手工完成一次完整部署,理解每个环节,见 [Kubernetes 系列](/kubernetes/kubernetes-基础)。
+  </Step>
+  <Step title="流水线固化">
+    用 CI 把构建、测试、镜像推送固化成流水线,做到"构建即打 tag,产物不可变"。
+  </Step>
+  <Step title="GitOps 发布">
+    用 Argo CD 接管部署:合并代码即发布,集群状态自动向仓库期望状态收敛。
+  </Step>
+  <Step title="渐进式交付">
+    引入 Argo Rollouts 做金丝雀发布,配合指标自动分析,出问题自动回滚。
+  </Step>
+</Steps>
+
+## 落地要点
+
+- **产物不可变**:镜像构建一次、处处部署,不在每个环境单独构建,见 [Docker 生产实践](/docker/docker-生产实践)
+- **Secret 不进仓库**:用平台提供的 Secret 管理(GitLab CI Variables、Sealed Secrets)
+- **与 Kubernetes 衔接**:Argo CD 监听仓库配置变化,自动同步到集群,见 [Kubernetes 生产实践](/kubernetes/kubernetes-生产实践)
+
+## 延伸阅读
+
+- [自动化运维概述](/automation/overview):Ansible / Terraform / Python 工具链
+- [Kubernetes 生产实践](/kubernetes/kubernetes-生产实践):GitOps 的运行环境
+- [Docker 生产实践](/docker/docker-生产实践):镜像规范是流水线的输入

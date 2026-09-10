@@ -1,0 +1,46 @@
+---
+title: "Argo CD 概述"
+description: "GitOps 持续交付:Git 仓库驱动集群状态"
+---
+
+Argo CD 是 Kubernetes 的 GitOps 控制器:它盯着 Git 仓库里的声明式配置,自动把集群同步到期望状态。本小节整理它的核心概念与落地要点。
+
+## 核心概念速览
+
+| 概念 | 说明 |
+| ---- | ---- |
+| Application | Argo CD 的核心 CRD,定义"哪个仓库的哪个目录部署到哪个集群" |
+| 期望状态 vs 实际状态 | 仓库是事实来源,集群实时状态向它对齐 |
+| Sync 策略 | 手动确认同步或自动同步(可带自愈) |
+| ApplicationSet | 批量生成 Application(多环境、多集群) |
+
+## 一个最小 Application
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+  namespace: argocd
+spec:
+  source:
+    repoURL: https://gitlab.example.com/ops/manifests.git
+    path: apps/my-app        # 仓库里的配置目录
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: my-app
+  syncPolicy:
+    automated:               # 仓库一变就自动同步
+      selfHeal: true         # 集群被手改了就改回来
+```
+
+## 落地要点
+
+- **CI 与 CD 分工**:[GitLab CI](/cicd/gitlab/overview) 构建镜像并更新配置仓库的 tag,Argo CD 检测到变化后发布
+- **回滚**:Git 里 revert 一次提交即可,历史即审计日志
+- **渐进式发布**:需要金丝雀时配合 [Argo Rollouts](/cicd/argorollout/overview)
+
+## 延伸阅读
+
+- [CI/CD & GitOps 概述](/cicd/overview)
+- [Kubernetes 生产实践](/kubernetes/kubernetes-生产实践):GitOps 的运行环境

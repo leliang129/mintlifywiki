@@ -134,6 +134,16 @@
             "pages": [
               "observability/tracing/overview"
             ]
+          },
+          {
+            "group": "Vector+VictoriaLogs",
+            "icon": "/images/icons/grafana.svg",
+            "pages": [
+              "observability/vector-victorialogs/overview",
+              "observability/vector-victorialogs/victorialogs",
+              "observability/vector-victorialogs/vector",
+              "observability/vector-victorialogs/grafana"
+            ]
           }
         ]
       },
@@ -141,7 +151,63 @@
         "tab": "自动化运维",
         "icon": "/images/icons/argocd.svg",
         "pages": [
-          "automation/overview"
+          "automation/overview",
+          {
+            "group": "Ansible",
+            "icon": "/images/icons/ansible.svg",
+            "pages": [
+              "automation/ansible/overview"
+            ]
+          },
+          {
+            "group": "Terraform",
+            "icon": "/images/icons/terraform.svg",
+            "pages": [
+              "automation/terraform/overview"
+            ]
+          },
+          {
+            "group": "Python",
+            "icon": "/images/icons/python.svg",
+            "pages": [
+              "automation/python/overview"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CI/CD&GitOps",
+        "icon": "/images/icons/gitlab.svg",
+        "pages": [
+          "cicd/overview",
+          {
+            "group": "GitLab",
+            "icon": "/images/icons/gitlab.svg",
+            "pages": [
+              "cicd/gitlab/overview"
+            ]
+          },
+          {
+            "group": "Jenkins",
+            "icon": "/images/icons/jenkins.svg",
+            "pages": [
+              "cicd/jenkins/overview"
+            ]
+          },
+          {
+            "group": "Argo CD",
+            "icon": "/images/icons/argocd.svg",
+            "pages": [
+              "cicd/argocd/overview"
+            ]
+          },
+          {
+            "group": "Argo Rollouts",
+            "icon": "/images/icons/argorollouts.svg",
+            "pages": [
+              "cicd/argorollout/overview"
+            ]
+          }
         ]
       }
     ]
@@ -179,7 +245,7 @@
       },
       {
         "label": "CI/CD&GitOps",
-        "href": "/automation/overview",
+        "href": "/cicd/overview",
         "icon": "/images/icons/gitlab.svg"
       }
     ],
